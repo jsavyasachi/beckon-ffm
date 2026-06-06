@@ -20,7 +20,7 @@ jar targets JDK 8.
 Add both beckon and beckon-ffm, then opt in with a system property.
 
 ```clj
-[net.clojars.savya/beckon "0.3.0"]
+[net.clojars.savya/beckon "0.4.0"]
 [net.clojars.savya/beckon-ffm "0.1.0"]
 ```
 
