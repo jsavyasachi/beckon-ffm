@@ -1,6 +1,7 @@
 # beckon-ffm
 
 [![Clojars Project](https://img.shields.io/clojars/v/net.clojars.savya/beckon-ffm.svg)](https://clojars.org/net.clojars.savya/beckon-ffm)
+[![cljdoc](https://cljdoc.org/badge/net.clojars.savya/beckon-ffm)](https://cljdoc.org/d/net.clojars.savya/beckon-ffm/CURRENT)
 [![ci](https://github.com/jsavyasachi/beckon-ffm/actions/workflows/ci.yml/badge.svg)](https://github.com/jsavyasachi/beckon-ffm/actions/workflows/ci.yml)
 
 Experimental signal backends for [beckon](https://github.com/jsavyasachi/beckon)
