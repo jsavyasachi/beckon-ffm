@@ -16,7 +16,12 @@ removed; this proves out the supported modern replacement. It is **experimental*
 and shipped separately precisely because it needs JDK 22+, while beckon's core
 jar targets JDK 8.
 
-## Usage
+## Stack
+
+<a href="https://clojure.org"><img src="https://img.shields.io/badge/Clojure-5881D8?style=flat&logo=clojure&logoColor=fff" alt="Clojure" /></a>
+<a href="https://openjdk.org/jeps/454"><img src="https://img.shields.io/badge/Java%20FFM-JDK%2022%2B-ED8B00?style=flat&logo=openjdk&logoColor=fff" alt="Java FFM" /></a>
+
+## Installation
 
 Add both beckon and beckon-ffm, then opt in with a system property.
 
