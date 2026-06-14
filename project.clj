@@ -1,4 +1,4 @@
-(defproject net.clojars.savya/beckon-ffm "0.1.0"
+(defproject net.clojars.savya/beckon-ffm "0.1.1"
   :description "Experimental Foreign Function & Memory signal backends for beckon: Linux signalfd and macOS/BSD kqueue."
   :url "https://github.com/jsavyasachi/beckon-ffm"
   :license {:name "Eclipse Public License"
