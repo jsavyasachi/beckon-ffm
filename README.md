@@ -23,7 +23,11 @@ jar targets JDK 8.
 
 ## Installation
 
-Add both beckon and beckon-ffm, then opt in with a system property.
+Use [`beckon`](https://github.com/jsavyasachi/beckon) by default. Add
+`beckon-ffm` only when you want the experimental Foreign Function & Memory
+backend and can run on JDK 22+.
+
+Add both artifacts, then opt in with a system property.
 
 ```clj
 [net.clojars.savya/beckon "0.4.1"]
@@ -37,7 +41,8 @@ Run the JVM with:
 ```
 
 The right native mechanism is selected automatically for the platform. The
-beckon API is unchanged - see the beckon README.
+beckon API is unchanged - see the
+[beckon README](https://github.com/jsavyasachi/beckon).
 
 ## Capabilities and limits
 
