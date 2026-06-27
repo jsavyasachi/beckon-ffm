@@ -10,4 +10,8 @@
   :javac-options ["-source" "22" "-target" "22"]
   ;; The whole point of this artifact is the FFM backend, so tests select it and
   ;; enable native access by default.
-  :jvm-opts ["-Dbeckon.signal.backend=ffm" "--enable-native-access=ALL-UNNAMED"])
+  :jvm-opts ["-Dbeckon.signal.backend=ffm" "--enable-native-access=ALL-UNNAMED"]
+  :deploy-repositories [["clojars" {:url "https://repo.clojars.org"
+                                    :username :env/clojars_username
+                                    :password :env/clojars_password
+                                    :sign-releases false}]])
