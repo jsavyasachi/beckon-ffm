@@ -68,5 +68,5 @@ macOS/BSD only. Continuously tested on JDK 25 across Ubuntu and macOS.
 
 Copyright © 2026 Savyasachi.
 
-A companion to beckon (originally by Jean Niklas L'orange). Distributed under the
-Eclipse Public License, the same as Clojure.
+A companion to [beckon](https://github.com/jsavyasachi/beckon) (originally by Jean Niklas L'orange).
+Distributed under the [Eclipse Public License 1.0](https://www.eclipse.org/legal/epl-v10.html).
