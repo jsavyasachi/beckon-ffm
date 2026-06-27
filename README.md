@@ -31,7 +31,7 @@ Add both artifacts, then opt in with a system property.
 
 ```clj
 [net.clojars.savya/beckon "0.4.1"]
-[net.clojars.savya/beckon-ffm "0.1.1"]
+[net.clojars.savya/beckon-ffm "0.1.2"]
 ```
 
 Run the JVM with:
