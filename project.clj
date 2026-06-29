@@ -4,7 +4,7 @@
   :license {:name "Eclipse Public License 1.0"
             :url "https://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.12.5"]
-                 [net.clojars.savya/beckon "0.4.0"]]
+                 [net.clojars.savya/beckon "0.4.1"]]
   :java-source-paths ["src/java"]
   ;; FFM (java.lang.foreign) is final in JDK 22; these backends require it.
   :javac-options ["-source" "22" "-target" "22"]
