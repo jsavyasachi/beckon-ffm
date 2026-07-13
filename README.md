@@ -2,7 +2,7 @@
 
 [![Clojars Project](https://img.shields.io/clojars/v/net.clojars.savya/beckon-ffm.svg)](https://clojars.org/net.clojars.savya/beckon-ffm)
 [![cljdoc](https://cljdoc.org/badge/net.clojars.savya/beckon-ffm)](https://cljdoc.org/d/net.clojars.savya/beckon-ffm/CURRENT)
-[![test](https://github.com/jsavyasachi/beckon-ffm/actions/workflows/ci.yml/badge.svg)](https://github.com/jsavyasachi/beckon-ffm/actions/workflows/ci.yml)
+[![test](https://github.com/jsavyasachi/beckon-ffm/actions/workflows/test.yml/badge.svg)](https://github.com/jsavyasachi/beckon-ffm/actions/workflows/test.yml)
 
 Experimental signal backends for [beckon](https://github.com/jsavyasachi/beckon)
 built entirely on the Java Foreign Function & Memory API (JDK 22+), as an
@@ -20,6 +20,8 @@ jar targets JDK 8.
 
 <a href="https://clojure.org"><img src="https://img.shields.io/badge/Clojure-5881D8?style=flat&logo=clojure&logoColor=fff" alt="Clojure" /></a>
 <a href="https://openjdk.org/jeps/454"><img src="https://img.shields.io/badge/Java%20FFM-JDK%2022%2B-ED8B00?style=flat&logo=openjdk&logoColor=fff" alt="Java FFM" /></a>
+<a href="https://clojure.org/guides/deps_and_cli"><img src="https://img.shields.io/badge/deps.edn-5881D8?style=flat&logo=clojure&logoColor=fff" alt="deps.edn" /></a>
+<a href="https://clojure.org/guides/tools_build"><img src="https://img.shields.io/badge/tools.build-5881D8?style=flat&logo=clojure&logoColor=fff" alt="tools.build" /></a>
 
 ## Installation
 
@@ -29,7 +31,14 @@ backend and can run on JDK 22+.
 
 Add both artifacts, then opt in with a system property.
 
-```clj
+```clojure
+net.clojars.savya/beckon {:mvn/version "0.4.1"}
+net.clojars.savya/beckon-ffm {:mvn/version "0.1.3"}
+```
+
+Leiningen:
+
+```clojure
 [net.clojars.savya/beckon "0.4.1"]
 [net.clojars.savya/beckon-ffm "0.1.3"]
 ```
@@ -62,7 +71,17 @@ replacement; `sun.misc.Signal` remains beckon's default.
 ## Compatibility
 
 Requires JDK 22 or later (Foreign Function & Memory API, JEP 454). Linux and
-macOS/BSD only. Continuously tested on JDK 25 across Ubuntu and macOS.
+macOS/BSD only. CI compiles and tests on JDK 22.
+
+## Development
+
+Use JDK 22. Compile the two Java FFM backends before running the test suite:
+
+```sh
+clojure -T:build compile-java
+clojure -M:test
+clojure -T:build jar
+```
 
 ## License
 

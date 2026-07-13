@@ -1,0 +1,21 @@
+{:paths ["src/java"]
+
+ :deps {org.clojure/clojure {:mvn/version "1.12.5"}
+        net.clojars.savya/beckon {:mvn/version "0.4.1"}}
+
+ :aliases
+ {:test
+  {:extra-paths ["test" "target/classes"]
+   :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
+                org.slf4j/slf4j-nop {:mvn/version "2.0.18"}}
+   ;; FFM backend + native access (the whole point of this artifact)
+   :jvm-opts ["-Dbeckon.signal.backend=ffm" "--enable-native-access=ALL-UNNAMED"]
+   :main-opts ["-m" "kaocha.runner"]}
+
+  :1.11 {:override-deps {org.clojure/clojure {:mvn/version "1.11.4"}}}
+  :1.12 {:override-deps {org.clojure/clojure {:mvn/version "1.12.5"}}}
+
+  :build
+  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}
+          slipset/deps-deploy {:mvn/version "0.2.5"}}
+   :ns-default build}}}
