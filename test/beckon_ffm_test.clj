@@ -4,7 +4,28 @@
   -Dbeckon.signal.backend=ffm and --enable-native-access."
   (:require [clojure.test :refer :all]
             [beckon :as beckon])
-  (:import (com.hypirion.beckon SignalRegistererHelper)))
+  (:import (com.hypirion.beckon SignalRegistererHelper)
+           (java.lang.foreign FunctionDescriptor Linker Linker$Option MemoryLayout MemorySegment
+                              ValueLayout)))
+
+(def ^:private signal-fn
+  (delay
+    (let [linker (Linker/nativeLinker)
+          libc   (.defaultLookup linker)]
+      (.downcallHandle
+       linker
+       (.orElseThrow (.find libc "signal"))
+       (FunctionDescriptor/of
+        ValueLayout/ADDRESS
+        (into-array MemoryLayout [ValueLayout/JAVA_INT ValueLayout/ADDRESS]))
+       (make-array Linker$Option 0)))))
+
+(defn- set-native-disposition [signo handler]
+  (-> ^java.lang.invoke.MethodHandle @signal-fn
+      (.invokeWithArguments
+       (object-array [(int signo) (MemorySegment/ofAddress (long handler))]))
+      ^MemorySegment
+      (.address)))
 
 (use-fixtures :each (fn [run] (try (run) (finally (beckon/reinit-all!)))))
 
@@ -40,3 +61,15 @@
   (testing "raising with no handlers installed does not throw"
     (reset! (beckon/signal-atom "USR2") [])
     (is (nil? (beckon/raise! "USR2")))))
+
+(deftest reset-restores-prior-native-disposition
+  (when (= "FfmKqueueBackend" (SignalRegistererHelper/backendName))
+    (testing "reset restores the disposition installed before registration"
+      (let [signo 30
+            prior (set-native-disposition signo 1)]
+        (try
+          (reset! (beckon/signal-atom "USR1") [identity])
+          (beckon/reinit-all!)
+          (is (= 1 (set-native-disposition signo 1)))
+          (finally
+            (set-native-disposition signo prior)))))))

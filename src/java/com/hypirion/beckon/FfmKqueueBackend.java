@@ -65,6 +65,7 @@ public final class FfmKqueueBackend implements SignalBackend {
 
     private final Arena arena = Arena.ofShared();
     private final Map<Integer, Seqable> registry = new ConcurrentHashMap<>();
+    private final Map<Integer, Long> previousDispositions = new ConcurrentHashMap<>();
     private final CountDownLatch ready = new CountDownLatch(1);
     private volatile int kq = -1;
     private volatile boolean running = true;
@@ -153,11 +154,12 @@ public final class FfmKqueueBackend implements SignalBackend {
         }
     }
 
-    /** Set the process-wide disposition of signo (SIG_IGN suppresses default). */
-    private void setDisposition(int signo, long handler) {
+    /** Set the process-wide disposition of signo and return its previous value. */
+    private long setDisposition(int signo, long handler) {
         try {
             MemorySegment old = (MemorySegment)
                 signalFn.invokeExact(signo, MemorySegment.ofAddress(handler));
+            return old.address();
         } catch (Throwable e) {
             throw new RuntimeException("signal() failed", e);
         }
@@ -175,8 +177,10 @@ public final class FfmKqueueBackend implements SignalBackend {
     @Override
     public synchronized void register(String signame, Seqable runnables) {
         int signo = signo(signame);
+        boolean firstRegistration = !registry.containsKey(signo);
         registry.put(signo, runnables);
-        setDisposition(signo, SIG_IGN); // suppress default action; kqueue still sees it
+        long previous = setDisposition(signo, SIG_IGN);
+        if (firstRegistration) previousDispositions.put(signo, previous);
         changeKevent(signo, EV_ADD);
     }
 
@@ -185,7 +189,8 @@ public final class FfmKqueueBackend implements SignalBackend {
         int signo = signo(signame);
         registry.remove(signo);
         changeKevent(signo, EV_DELETE);
-        setDisposition(signo, SIG_DFL);
+        setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
+        previousDispositions.remove(signo);
     }
 
     @Override
@@ -193,7 +198,8 @@ public final class FfmKqueueBackend implements SignalBackend {
         for (Integer signo : new ArrayList<>(registry.keySet())) {
             registry.remove(signo);
             changeKevent(signo, EV_DELETE);
-            setDisposition(signo, SIG_DFL);
+            setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
+            previousDispositions.remove(signo);
         }
     }
 
