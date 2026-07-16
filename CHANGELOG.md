@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.5] - 2026-07-16
+### Changed
+- Updated the beckon dependency to 0.4.2.
+
 ## [0.1.4] - 2026-07-12
 ### Changed
 - Migrated the build, tests, CI, and release workflow to deps.edn and tools.build with JDK 22 Java FFM compilation.
