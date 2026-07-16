@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.6] - 2026-07-16
+### Fixed
+- The kqueue backend restores the previously-installed signal disposition on `reset` instead of forcing `SIG_DFL`.
+
 ## [0.1.5] - 2026-07-16
 ### Changed
 - Updated the beckon dependency to 0.4.2.
