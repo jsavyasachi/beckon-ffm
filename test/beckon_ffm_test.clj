@@ -63,13 +63,12 @@
     (is (nil? (beckon/raise! "USR2")))))
 
 (deftest reset-restores-prior-native-disposition
-  (when (= "FfmKqueueBackend" (SignalRegistererHelper/backendName))
-    (testing "reset restores the disposition installed before registration"
-      (let [signo 30
-            prior (set-native-disposition signo 1)]
-        (try
-          (reset! (beckon/signal-atom "USR1") [identity])
-          (beckon/reinit-all!)
-          (is (= 1 (set-native-disposition signo 1)))
-          (finally
-            (set-native-disposition signo prior)))))))
+  (testing "reset restores the disposition installed before registration"
+    (let [signo (if (= "FfmKqueueBackend" (SignalRegistererHelper/backendName)) 30 10)
+          prior (set-native-disposition signo 1)]
+      (try
+        (reset! (beckon/signal-atom "USR1") [identity])
+        (beckon/reinit-all!)
+        (is (= 1 (set-native-disposition signo 1)))
+        (finally
+          (set-native-disposition signo prior))))))

@@ -11,6 +11,7 @@ import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -47,6 +48,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private static final int SFD_CLOEXEC = 0x80000;
     private static final int SIGSET_SIZE = 128;          // glibc sigset_t
     private static final int SIGINFO_SIZE = 128;         // struct signalfd_siginfo
+    private static final long SIG_DFL = 0L;
 
     /** Catchable signals beckon supports, by POSIX short name. */
     private static final Map<String, Integer> SIGNOS = new LinkedHashMap<>();
@@ -65,9 +67,11 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private final MethodHandle pthreadSigmask; // int(int, sigset_t*, sigset_t*)
     private final MethodHandle pthreadSelf;  // pthread_t pthread_self(void)
     private final MethodHandle pthreadKill;  // int pthread_kill(pthread_t, int)
+    private final MethodHandle signalFn;     // sighandler_t signal(int, sighandler_t)
 
     private final Arena arena = Arena.ofShared();
     private final Map<Integer, Seqable> registry = new ConcurrentHashMap<>();
+    private final Map<Integer, Long> previousDispositions = new ConcurrentHashMap<>();
     private final CountDownLatch ready = new CountDownLatch(1);
 
     private volatile int fd = -1;
@@ -101,6 +105,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
             FunctionDescriptor.of(JAVA_LONG));
         pthreadKill = linker.downcallHandle(libc.find("pthread_kill").orElseThrow(),
             FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_INT));
+        signalFn = linker.downcallHandle(libc.find("signal").orElseThrow(),
+            FunctionDescriptor.of(ADDRESS, JAVA_INT, ADDRESS));
 
         Thread t = new Thread(this::dispatch, "beckon-ffm-dispatch");
         t.setDaemon(true);
@@ -194,22 +200,45 @@ public final class FfmSignalfdBackend implements SignalBackend {
         return n;
     }
 
+    /** Set the process-wide disposition of signo and return its previous value. */
+    private long setDisposition(int signo, long handler) {
+        try {
+            MemorySegment old = (MemorySegment)
+                signalFn.invokeExact(signo, MemorySegment.ofAddress(handler));
+            return old.address();
+        } catch (Throwable e) {
+            throw new RuntimeException("signal() failed", e);
+        }
+    }
+
     @Override
     public synchronized void register(String signame, Seqable runnables) {
-        registry.put(signo(signame), runnables);
+        int signo = signo(signame);
+        boolean firstRegistration = !registry.containsKey(signo);
+        registry.put(signo, runnables);
+        long previous = setDisposition(signo, SIG_DFL);
+        if (firstRegistration) previousDispositions.put(signo, previous);
         rebuildMask();
     }
 
     @Override
     public synchronized void reset(String signame) {
-        registry.remove(signo(signame));
+        int signo = signo(signame);
+        registry.remove(signo);
         rebuildMask();
+        setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
+        previousDispositions.remove(signo);
     }
 
     @Override
     public synchronized void resetAll() {
+        ArrayList<Integer> signos = new ArrayList<>(registry.keySet());
         registry.clear();
         rebuildMask();
+        for (Integer signo : signos) {
+            setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
+            previousDispositions.remove(signo);
+        }
     }
 
     @Override
