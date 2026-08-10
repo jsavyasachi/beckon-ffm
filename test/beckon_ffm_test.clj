@@ -1,6 +1,6 @@
 (ns beckon-ffm-test
-  "Runs beckon's behavioral spec against whichever FFM backend this platform
-  selects (signalfd on Linux, kqueue on macOS). project.clj sets
+  "Tests beckon's behavior with the FFM backend that this platform selects:
+  signalfd on Linux and kqueue on macOS. project.clj sets
   -Dbeckon.signal.backend=ffm and --enable-native-access."
   (:require [clojure.test :refer :all]
             [beckon :as beckon])
@@ -30,25 +30,25 @@
 (use-fixtures :each (fn [run] (try (run) (finally (beckon/reinit-all!)))))
 
 (deftest ffm-backend-is-active
-  (testing "an FFM backend loaded for this platform"
+  (testing "this platform loads an FFM backend"
     (is (contains? #{"FfmSignalfdBackend" "FfmKqueueBackend"}
                    (SignalRegistererHelper/backendName)))))
 
 (deftest signal-atom-identity
-  (testing "the same signal name yields the identical atom"
+  (testing "the same signal name gives the same atom"
     (is (identical? (beckon/signal-atom "USR2") (beckon/signal-atom "USR2"))))
-  (testing "different signals yield different atoms"
+  (testing "different signals give different atoms"
     (is (not (identical? (beckon/signal-atom "USR2") (beckon/signal-atom "WINCH"))))))
 
 (deftest handler-runs-on-raise
-  (testing "a handler set in the atom is invoked when the signal is raised"
+  (testing "a handler in the atom runs when the signal is raised"
     (let [ran (promise)]
       (reset! (beckon/signal-atom "USR2") [(fn [] (deliver ran true))])
       (beckon/raise! "USR2")
       (is (true? (deref ran 2000 :timed-out))))))
 
 (deftest all-handlers-run
-  (testing "every Runnable in the collection is invoked on a single raise"
+  (testing "one raise invokes every Runnable in the collection"
     (let [hits  (atom 0)
           three (java.util.concurrent.CountDownLatch. 3)
           bump  (fn [] (swap! hits inc) (.countDown three))]
@@ -58,7 +58,7 @@
       (is (= 3 @hits)))))
 
 (deftest empty-handler-collection-is-a-noop
-  (testing "raising with no handlers installed does not throw"
+  (testing "a raise with no handlers does not throw"
     (reset! (beckon/signal-atom "USR2") [])
     (is (nil? (beckon/raise! "USR2")))))
 

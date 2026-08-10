@@ -5,16 +5,15 @@
 [![test](https://github.com/jsavyasachi/beckon-ffm/actions/workflows/test.yml/badge.svg)](https://github.com/jsavyasachi/beckon-ffm/actions/workflows/test.yml)
 
 Experimental signal backends for [beckon](https://github.com/jsavyasachi/beckon)
-built entirely on the Java Foreign Function & Memory API (JDK 22+), as an
+use only the Java Foreign Function & Memory API (JDK 22+). Use them as an
 alternative to beckon's default `sun.misc.Signal` backend:
 
 - **Linux** - `signalfd(2)`
 - **macOS / BSD** - `kqueue(2)` with `EVFILT_SIGNAL`
 
-It exists because `sun.misc.Signal` is an internal JDK API that may eventually be
-removed; this proves out the supported modern replacement. It is **experimental**
-and shipped separately precisely because it needs JDK 22+, while beckon's core
-jar targets JDK 8.
+`sun.misc.Signal` is an internal JDK API. The JDK can remove it. This library
+tests a supported replacement. It is **experimental** and ships separately
+because it requires JDK 22+. The beckon core jar targets JDK 8.
 
 ## Stack
 
@@ -49,24 +48,24 @@ Run the JVM with:
 -Dbeckon.signal.backend=ffm --enable-native-access=ALL-UNNAMED
 ```
 
-The right native mechanism is selected automatically for the platform. The
-beckon API is unchanged - see the
+The platform selects the native mechanism automatically. The beckon API does
+not change. See the
 [beckon README](https://github.com/jsavyasachi/beckon).
 
 ## Capabilities and limits
 
-The two implementations differ, which is instructive:
+The two implementations differ:
 
-- **Linux (`signalfd`)** reliably handles beckon's own `raise!`, but not signals
-  from *outside* the process (e.g. `kill -HUP`): a JVM starts threads before
-  beckon loads, and `signalfd` only captures a signal blocked in every thread,
-  which cannot be arranged retroactively.
-- **macOS/BSD (`kqueue`)** sets each managed signal to `SIG_IGN` - a process-wide
-  disposition - so it also observes external signals.
+- **Linux (`signalfd`)** reliably handles beckon's own `raise!`. It does not
+  reliably handle signals from *outside* the process (e.g. `kill -HUP`). A JVM
+  starts threads before beckon loads. `signalfd` only captures a signal blocked
+  in every thread. beckon cannot arrange this after the JVM starts.
+- **macOS/BSD (`kqueue`)** sets each managed signal to `SIG_IGN`. This is a
+  process-wide disposition. It also observes external signals.
 
-Because of the Linux limitation and JEP 472 native-access restrictions
-(`--enable-native-access`, denied by default from JDK 26), this is not a drop-in
-replacement; `sun.misc.Signal` remains beckon's default.
+The Linux limitation and JEP 472 native-access restrictions mean this is not a
+drop-in replacement. `--enable-native-access` is denied by default from JDK 26.
+`sun.misc.Signal` remains beckon's default.
 
 ## Compatibility
 
