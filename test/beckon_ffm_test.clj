@@ -5,6 +5,7 @@
   (:require [clojure.test :refer :all]
             [beckon :as beckon])
   (:import (com.hypirion.beckon SignalRegistererHelper)
+           (java.lang.reflect InvocationTargetException)
            (java.lang.foreign FunctionDescriptor Linker Linker$Option MemoryLayout MemorySegment
                               ValueLayout)))
 
@@ -33,6 +34,26 @@
   (testing "this platform loads an FFM backend"
     (is (contains? #{"FfmSignalfdBackend" "FfmKqueueBackend"}
                    (SignalRegistererHelper/backendName)))))
+
+(deftest native-signal-failure-surfaces-return-and-errno
+  (testing "a failed signal(2) disposition change is not silently accepted"
+    (let [backend-class (Class/forName
+                         (str "com.hypirion.beckon."
+                              (SignalRegistererHelper/backendName)))
+          backend       (.newInstance (.getDeclaredConstructor backend-class
+                                                               (make-array Class 0))
+                                      (object-array 0))
+          set-disposition (.getDeclaredMethod backend-class "setDisposition"
+                                              (into-array Class [Integer/TYPE Long/TYPE]))]
+      (.setAccessible set-disposition true)
+      (try
+        (.invoke set-disposition backend (object-array [(int 0) (long 0)]))
+        (is false "signal(0, SIG_DFL) should throw instead of returning SIG_ERR")
+        (catch InvocationTargetException e
+          (let [failure (.getCause e)]
+            (is (instance? clojure.lang.ExceptionInfo failure))
+            (is (= -1 (:return (ex-data failure))))
+            (is (integer? (:errno (ex-data failure))))))))))
 
 (deftest signal-atom-identity
   (testing "the same signal name gives the same atom"

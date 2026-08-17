@@ -17,7 +17,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 
+import clojure.lang.ExceptionInfo;
 import clojure.lang.ISeq;
+import clojure.lang.Keyword;
+import clojure.lang.PersistentArrayMap;
 import clojure.lang.PersistentHashSet;
 import clojure.lang.Seqable;
 
@@ -106,7 +109,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
         pthreadKill = linker.downcallHandle(libc.find("pthread_kill").orElseThrow(),
             FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_INT));
         signalFn = linker.downcallHandle(libc.find("signal").orElseThrow(),
-            FunctionDescriptor.of(ADDRESS, JAVA_INT, ADDRESS));
+            FunctionDescriptor.of(ADDRESS, JAVA_INT, ADDRESS),
+            Linker.Option.captureCallState("errno"));
 
         Thread t = new Thread(this::dispatch, "beckon-ffm-dispatch");
         t.setDaemon(true);
@@ -122,8 +126,10 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private MemorySegment sigset(Iterable<Integer> signos) throws Throwable {
         MemorySegment set = arena.allocate(SIGSET_SIZE);
         int r = (int) sigemptyset.invokeExact(set);
+        requireZero("sigemptyset", r);
         for (int signo : signos) {
             r = (int) sigaddset.invokeExact(set, signo);
+            requireZero("sigaddset", r);
         }
         return set;
     }
@@ -136,6 +142,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
             // directed here stays pending and is readable via the signalfd.
             MemorySegment blockAll = sigset(SIGNOS.values());
             int r = (int) pthreadSigmask.invokeExact(SIG_BLOCK, blockAll, MemorySegment.NULL);
+            requireZero("pthread_sigmask", r);
             // Start with an empty signalfd mask; register() adds to it.
             MemorySegment empty = sigset(java.util.Collections.emptyList());
             fd = (int) signalfd.invokeExact(-1, empty, SFD_CLOEXEC);
@@ -186,6 +193,10 @@ public final class FfmSignalfdBackend implements SignalBackend {
         try {
             MemorySegment set = sigset(registry.keySet());
             int r = (int) signalfd.invokeExact(fd, set, SFD_CLOEXEC);
+            if (r < 0) {
+                throw new ExceptionInfo("signalfd() mask update failed",
+                    PersistentArrayMap.create(Map.of(Keyword.intern("return"), r)));
+            }
         } catch (Throwable e) {
             throw new RuntimeException("signalfd mask update failed", e);
         }
@@ -202,13 +213,33 @@ public final class FfmSignalfdBackend implements SignalBackend {
 
     /** Set the process-wide disposition of signo and return its previous value. */
     private long setDisposition(int signo, long handler) {
+        MemorySegment old;
+        int errno;
         try {
-            MemorySegment old = (MemorySegment)
-                signalFn.invokeExact(signo, MemorySegment.ofAddress(handler));
-            return old.address();
+            MemorySegment callState = arena.allocate(Linker.Option.captureStateLayout());
+            old = (MemorySegment) signalFn.invokeExact(callState, signo,
+                                                       MemorySegment.ofAddress(handler));
+            errno = callState.get(JAVA_INT, 0);
         } catch (Throwable e) {
             throw new RuntimeException("signal() failed", e);
         }
+        return signalResult("signal()", old.address(), errno);
+    }
+
+    private static void requireZero(String operation, int result) {
+        if (result != 0) {
+            throw new ExceptionInfo(operation + " failed",
+                PersistentArrayMap.create(Map.of(Keyword.intern("return"), result)));
+        }
+    }
+
+    private static long signalResult(String operation, long result, int errno) {
+        if (result == -1L) {
+            throw new ExceptionInfo(operation + " failed",
+                PersistentArrayMap.create(Map.of(Keyword.intern("return"), result,
+                                                 Keyword.intern("errno"), errno)));
+        }
+        return result;
     }
 
     @Override
@@ -260,6 +291,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 // Direct the signal at the dispatcher thread (where it is
                 // blocked), so it becomes pending there and is read from the fd.
                 int r = (int) pthreadKill.invokeExact(dispatcherPthread, signo);
+                requireZero("pthread_kill", r);
             } catch (Throwable e) {
                 raiseDone = null;
                 throw new RuntimeException("pthread_kill failed for " + signame, e);

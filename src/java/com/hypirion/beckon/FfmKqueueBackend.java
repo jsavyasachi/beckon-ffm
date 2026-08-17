@@ -17,8 +17,11 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 
+import clojure.lang.ExceptionInfo;
 import clojure.lang.ISeq;
+import clojure.lang.Keyword;
 import clojure.lang.PersistentHashSet;
+import clojure.lang.PersistentArrayMap;
 import clojure.lang.Seqable;
 
 /**
@@ -87,7 +90,8 @@ public final class FfmKqueueBackend implements SignalBackend {
         kevent = linker.downcallHandle(libc.find("kevent").orElseThrow(),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
         signalFn = linker.downcallHandle(libc.find("signal").orElseThrow(),
-            FunctionDescriptor.of(ADDRESS, JAVA_INT, ADDRESS));
+            FunctionDescriptor.of(ADDRESS, JAVA_INT, ADDRESS),
+            Linker.Option.captureCallState("errno"));
         kill = linker.downcallHandle(libc.find("kill").orElseThrow(),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
         getpid = linker.downcallHandle(libc.find("getpid").orElseThrow(),
@@ -149,6 +153,7 @@ public final class FfmKqueueBackend implements SignalBackend {
             kev.set(JAVA_LONG, 24, 0L);            // udata
             int r = (int) kevent.invokeExact(kq, kev, 1,
                                              MemorySegment.NULL, 0, MemorySegment.NULL);
+            requireZero("kevent() change", r);
         } catch (Throwable e) {
             throw new RuntimeException("kevent() change failed", e);
         }
@@ -156,13 +161,33 @@ public final class FfmKqueueBackend implements SignalBackend {
 
     /** Set the process-wide disposition of signo and return its previous value. */
     private long setDisposition(int signo, long handler) {
+        MemorySegment old;
+        int errno;
         try {
-            MemorySegment old = (MemorySegment)
-                signalFn.invokeExact(signo, MemorySegment.ofAddress(handler));
-            return old.address();
+            MemorySegment callState = arena.allocate(Linker.Option.captureStateLayout());
+            old = (MemorySegment) signalFn.invokeExact(callState, signo,
+                                                       MemorySegment.ofAddress(handler));
+            errno = callState.get(JAVA_INT, 0);
         } catch (Throwable e) {
             throw new RuntimeException("signal() failed", e);
         }
+        return signalResult("signal()", old.address(), errno);
+    }
+
+    private static void requireZero(String operation, int result) {
+        if (result != 0) {
+            throw new ExceptionInfo(operation + " failed",
+                PersistentArrayMap.create(Map.of(Keyword.intern("return"), result)));
+        }
+    }
+
+    private static long signalResult(String operation, long result, int errno) {
+        if (result == -1L) {
+            throw new ExceptionInfo(operation + " failed",
+                PersistentArrayMap.create(Map.of(Keyword.intern("return"), result,
+                                                 Keyword.intern("errno"), errno)));
+        }
+        return result;
     }
 
     private static int signo(String signame) {
@@ -220,6 +245,7 @@ public final class FfmKqueueBackend implements SignalBackend {
             try {
                 int pid = (int) getpid.invokeExact();
                 int r = (int) kill.invokeExact(pid, signo); // process-directed
+                requireZero("kill", r);
             } catch (Throwable e) {
                 raiseDone = null;
                 throw new RuntimeException("kill failed for " + signame, e);
