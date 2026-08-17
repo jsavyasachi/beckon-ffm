@@ -32,14 +32,14 @@ Add both artifacts, then opt in with a system property.
 
 ```clojure
 net.clojars.savya/beckon {:mvn/version "0.4.2"}
-net.clojars.savya/beckon-ffm {:mvn/version "0.1.7"}
+net.clojars.savya/beckon-ffm {:mvn/version "0.1.8"}
 ```
 
 Leiningen:
 
 ```clojure
 [net.clojars.savya/beckon "0.4.2"]
-[net.clojars.savya/beckon-ffm "0.1.7"]
+[net.clojars.savya/beckon-ffm "0.1.8"]
 ```
 
 Run the JVM with:

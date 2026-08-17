@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.8] - 2026-08-17
+
+### Fixed
+
+- Native call return codes (`signal`, `kevent`, `kill`, `sigemptyset`,
+  `sigaddset`, `pthread_sigmask`, `pthread_kill`, and the signalfd mask update)
+  are checked and throw with the return value and captured errno instead of
+  being ignored.
+
 ## [0.1.7] - 2026-07-16
 ### Fixed
 - Both signal backends (kqueue on macOS, signalfd on Linux) restore the previously-installed signal disposition on `reset` instead of forcing `SIG_DFL`.
