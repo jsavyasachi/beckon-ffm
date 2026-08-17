@@ -1,0 +1,4 @@
+{:linters
+ {:refer-all
+  ;; Existing test namespace intentionally refers clojure.test's assertion API.
+  {:level :off}}}
