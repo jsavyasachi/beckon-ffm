@@ -11,19 +11,20 @@ fixes, and focused feature contributions.
 
 ## Development
 
-This is a Clojure library. You need a JDK and [Leiningen](https://leiningen.org/).
-Projects that use `deps.edn` use the Clojure CLI. See the README.
+This is a Clojure library built with `deps.edn` and the
+[Clojure CLI](https://clojure.org/guides/install_clojure); Leiningen is not
+required. You need a JDK and the Clojure CLI. See the README for the full set
+of aliases.
 
 ```bash
-lein test     # run the test suite
-lein check    # AOT-compile; must be free of reflection warnings
+clojure -M:test    # run the test suite (compiled with *warn-on-reflection* on)
 ```
 
 A mergeable change must meet these requirements:
 
 - **Tests first.** Add or update tests for the behavior you change. For a bug
   fix, add a regression test that fails before your fix and passes after.
-- **Green build.** `lein test` must pass. `lein check` must report **zero**
+- **Green build.** The test suite must pass. The build must report **zero**
   reflection warnings.
 - **No scope creep.** Keep each pull request to one logical change.
 
