@@ -1,6 +1,7 @@
 (ns beckon-signal-child
   (:gen-class)
-  (:require [beckon :as beckon]))
+  (:require [beckon :as beckon]
+            [clojure.string :as string]))
 
 (defn -main [signal]
   (reset! (beckon/signal-atom signal)
@@ -11,15 +12,15 @@
     (future
       (Thread/sleep 1000)
       (println "DEBUG"
-               (->> (clojure.string/split-lines
+               (->> (string/split-lines
                      (slurp "/proc/self/status"))
                     (filter #(or (.startsWith % "SigBlk:")
                                  (.startsWith % "SigPnd:")
                                  (.startsWith % "ShdPnd:")))
-                    (clojure.string/join "|"))
+                    (string/join "|"))
                (->> (.listFiles (java.io.File. "/proc/self/fdinfo"))
                     (map slurp)
                     (filter #(.contains % "sig-mask:"))
-                    (clojure.string/join "|"))
-        (flush)))
+                    (string/join "|"))
+        (flush))))
   @(promise))
