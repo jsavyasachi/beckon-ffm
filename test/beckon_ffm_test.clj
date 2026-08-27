@@ -43,12 +43,34 @@
     (.setAccessible field true)
     (.get field backend)))
 
+(defn- invoke-static [class-name method-name args]
+  (let [klass (Class/forName class-name)
+        method (.getDeclaredMethod klass method-name
+                                   (into-array Class
+                                               (map #(if (integer? %)
+                                                       Integer/TYPE
+                                                       (class %))
+                                                    args)))]
+    (.setAccessible method true)
+    (try
+      (.invoke method nil (object-array (map #(if (integer? %) (int %) %)
+                                             args)))
+      (catch InvocationTargetException e
+        (.getMessage (.getCause e))))))
+
 (use-fixtures :each (fn [run] (try (run) (finally (beckon/reinit-all!)))))
 
 (deftest ffm-backend-is-active
   (testing "this platform loads an FFM backend"
     (is (contains? #{"FfmSignalfdBackend" "FfmKqueueBackend"}
                    (SignalRegistererHelper/backendName)))))
+
+(deftest linux-abi-validation-reports-the-actual-size
+  (testing "a Linux ABI size mismatch names the struct, expected size, actual size, and platform"
+    (let [message (invoke-static "com.hypirion.beckon.LinuxAbi" "validate"
+                                ["Linux" "x86_64" 64 128 8])]
+      (is (= "expected sigset_t of 128 bytes, got 64 on Linux/x86_64"
+             message)))))
 
 (deftest native-signal-failure-surfaces-return-and-errno
   (testing "a failed signal(2) disposition change is not silently accepted"
