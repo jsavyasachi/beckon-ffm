@@ -32,14 +32,14 @@ Add both artifacts, then opt in with a system property.
 
 ```clojure
 net.clojars.savya/beckon {:mvn/version "0.4.2"}
-net.clojars.savya/beckon-ffm {:mvn/version "0.2.0"}
+net.clojars.savya/beckon-ffm {:mvn/version "0.3.0"}
 ```
 
 Leiningen:
 
 ```clojure
 [net.clojars.savya/beckon "0.4.2"]
-[net.clojars.savya/beckon-ffm "0.2.0"]
+[net.clojars.savya/beckon-ffm "0.3.0"]
 ```
 
 Run the JVM with:
@@ -51,6 +51,22 @@ Run the JVM with:
 The platform selects the native mechanism automatically. The beckon API does
 not change. See the
 [beckon README](https://github.com/jsavyasachi/beckon).
+
+### Closing the native backend
+
+The FFM backend owns a dispatcher thread, native descriptor, and shared native
+memory arena. Close it explicitly when the JVM remains running across a REPL
+reload or test suite, or before a supervised in-process restart:
+
+```clojure
+(require '[beckon-ffm :as beckon-ffm])
+(beckon-ffm/close!)
+```
+
+`close!` cooperatively stops the dispatcher, restores all signal dispositions
+that beckon changed, and releases the native resources. It is safe to call
+more than once. A closed backend cannot handle subsequent signals; a fresh JVM
+or freshly constructed backend should be used after shutdown.
 
 ### Reliable Linux external signals (opt-in)
 

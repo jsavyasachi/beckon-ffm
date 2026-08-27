@@ -1,4 +1,4 @@
-{:paths ["src/java"]
+{:paths ["src" "src/java"]
 
  :deps {org.clojure/clojure {:mvn/version "1.12.5"}
         net.clojars.savya/beckon {:mvn/version "0.4.2"}}

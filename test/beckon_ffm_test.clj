@@ -4,7 +4,8 @@
   -Dbeckon.signal.backend=ffm and --enable-native-access."
   (:require [clojure.java.io :as io]
             [clojure.test :refer :all]
-            [beckon :as beckon])
+            [beckon :as beckon]
+            [beckon-ffm :as beckon-ffm])
   (:import (com.hypirion.beckon SignalRegistererHelper)
            (java.lang.reflect InvocationTargetException)
            (java.lang.foreign FunctionDescriptor Linker Linker$Option MemoryLayout MemorySegment
@@ -28,6 +29,19 @@
        (object-array [(int signo) (MemorySegment/ofAddress (long handler))]))
       ^MemorySegment
       (.address)))
+
+(defn- backend-instance []
+  (let [backend-class (Class/forName
+                       (str "com.hypirion.beckon."
+                            (SignalRegistererHelper/backendName)))]
+    (.newInstance (.getDeclaredConstructor backend-class
+                                             (make-array Class 0))
+                  (object-array 0))))
+
+(defn- dispatcher-thread [backend]
+  (let [field (.getDeclaredField (.getClass backend) "dispatcherThread")]
+    (.setAccessible field true)
+    (.get field backend)))
 
 (use-fixtures :each (fn [run] (try (run) (finally (beckon/reinit-all!)))))
 
@@ -104,6 +118,35 @@
           "managed registration must use the backend's safe default disposition")
       (finally
         (set-native-disposition 15 prior)))))
+
+(deftest backend-close-stops-dispatcher-restores-dispositions-and-releases-resources
+  (let [signo (if (= "FfmKqueueBackend" (SignalRegistererHelper/backendName)) 30 10)
+        prior (set-native-disposition signo 1)
+        backend (backend-instance)]
+    (try
+      (.register backend "USR1" [identity])
+      (beckon-ffm/close! backend)
+      (.join (dispatcher-thread backend) 2000)
+      (is (not (.isAlive (dispatcher-thread backend)))
+          "close must terminate the dispatcher thread")
+      (is (= 1 (set-native-disposition signo 1))
+          "close must restore the disposition from before registration")
+      (is (nil? (beckon-ffm/close! backend)) "close must be idempotent")
+      (finally
+        (set-native-disposition signo prior)))))
+
+(deftest backend-can-be-reinitialized-after-close
+  (let [backend (backend-instance)
+        fresh (backend-instance)
+        ran (promise)]
+    (try
+      (beckon-ffm/close! backend)
+      (.register fresh "USR2" [(fn [] (deliver ran true))])
+      (.raise fresh "USR2")
+      (is (true? (deref ran 2000 :timed-out)))
+      (finally
+        (beckon-ffm/close! backend)
+        (beckon-ffm/close! fresh)))))
 
 (defn- linux? [] (= "Linux" (System/getProperty "os.name")))
 
