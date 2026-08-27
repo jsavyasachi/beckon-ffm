@@ -148,6 +148,22 @@
         (beckon-ffm/close! backend)
         (beckon-ffm/close! fresh)))))
 
+(deftest signalfd-dispatcher-survives-repeated-thread-directed-raises
+  (if (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
+    (let [backend (backend-instance)
+          hits (atom 0)]
+      (try
+        (.register backend "USR2" [(fn [] (swap! hits inc))])
+        (dotimes [_ 8]
+          (.raise backend "USR2"))
+        (is (= 8 @hits)
+            "every thread-directed signal must be consumed by signalfd")
+        (is (.isAlive (dispatcher-thread backend))
+            "the poll-based dispatcher must remain alive after a raise")
+        (finally
+          (beckon-ffm/close! backend))))
+    (is true "Linux signalfd-only regression test")))
+
 (defn- linux? [] (= "Linux" (System/getProperty "os.name")))
 
 (defn- launcher-path []
