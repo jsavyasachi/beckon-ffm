@@ -3,6 +3,7 @@
   signalfd on Linux and kqueue on macOS. project.clj sets
   -Dbeckon.signal.backend=ffm and --enable-native-access."
   (:require [clojure.java.io :as io]
+            [clojure.string :as string]
             [clojure.test :refer :all]
             [beckon :as beckon]
             [beckon-ffm :as beckon-ffm])
@@ -185,7 +186,6 @@
 
 (defn- child-command []
   ["java" "-Xrs" "--enable-native-access=ALL-UNNAMED"
-   "-Dbeckon.signal.debug=true"
    "-Dbeckon.signal.backend=ffm"
    "-cp" (System/getProperty "java.class.path")
    "clojure.main" "-m" "beckon-signal-child" "TERM"])
@@ -206,6 +206,22 @@
       (do (future-cancel f) false)
       result)))
 
+(defn- process-diagnostics [process]
+  (try
+    (let [root (str "/proc/" (.pid process))]
+      (str (->> (string/split-lines (slurp (str root "/status")))
+                (filter #(or (.startsWith % "SigBlk:")
+                             (.startsWith % "SigPnd:")
+                             (.startsWith % "ShdPnd:")))
+                (string/join "|"))
+           " fdinfo="
+           (->> (.listFiles (java.io.File. (str root "/fdinfo")))
+                (map slurp)
+                (filter #(.contains % "sig-mask:"))
+                (string/join "|"))))
+    (catch Exception e
+      (str "unavailable: " (.getMessage e)))))
+
 (deftest external-term-works-through-prelaunch-shim
   (if (linux?)
     (let [process (-> (ProcessBuilder.
@@ -218,7 +234,10 @@
       (try
         (is (wait-for-line reader "READY" 5000))
         (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
-        (is (wait-for-line reader "HANDLED" 5000))
+        (let [handled? (wait-for-line reader "HANDLED" 5000)]
+          (when-not handled?
+            (println "external TERM diagnostics:" (process-diagnostics process)))
+          (is handled?))
         (is (.isAlive process))
         (finally
           (.destroyForcibly process))))
