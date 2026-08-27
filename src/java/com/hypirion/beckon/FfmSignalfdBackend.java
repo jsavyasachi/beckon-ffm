@@ -257,7 +257,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 if (!running) break;
                 continue;
             }
-            if (!running || ready <= 0) continue;
+            if (!running) break;
             boolean wakeReady = (pollfds.get(JAVA_SHORT, 12) & POLLIN) != 0;
             if (wakeReady) {
                 try {
