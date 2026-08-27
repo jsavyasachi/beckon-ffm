@@ -96,6 +96,7 @@ jobs:
       - name: Test
         run: |
           clojure -T:build compile-java
+          clojure -T:build compile-native-shim
           clojure -M:test
 
       - name: Extract release notes from CHANGELOG

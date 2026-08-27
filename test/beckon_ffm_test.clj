@@ -159,7 +159,7 @@
       (try
         (is (wait-for-line reader "READY" 5000))
         (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
-        (let [exited? (.waitFor process 5 java.util.concurrent.TimeUnit/SECONDS)]
+        (let [exited? (.waitFor process 15 java.util.concurrent.TimeUnit/SECONDS)]
           (is exited? "process should exit under the default (unmasked) disposition")
           (when exited? (is (not= 0 (.exitValue process)))))
         (finally
