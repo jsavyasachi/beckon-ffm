@@ -60,6 +60,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private static final int SIG_BLOCK   = 0;
     private static final int SFD_CLOEXEC = 0x80000;
     private static final int SFD_NONBLOCK = 0x800;
+    private static final int F_SETFL = 4;
+    private static final int O_NONBLOCK = 0x800;
     private static final int EFD_CLOEXEC = 0x80000;
     private static final int HOTSPOT_SIGNAL = 12; // SIGUSR2 on Linux
     private static final short POLLIN = 0x0001;
@@ -91,6 +93,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private final MethodHandle poll;         // int poll(struct pollfd*, nfds_t, int)
     private final MethodHandle write;        // ssize_t write(int, void*, size_t)
     private final MethodHandle closeFn;      // int close(int)
+    private final MethodHandle fcntl;        // int fcntl(int, int, int)
 
     private final Arena arena = Arena.ofShared();
     private final Map<Integer, Seqable> registry = new ConcurrentHashMap<>();
@@ -145,6 +148,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
             FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
         closeFn = linker.downcallHandle(libc.find("close").orElseThrow(),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT));
+        fcntl = linker.downcallHandle(libc.find("fcntl").orElseThrow(),
+            FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
 
         dispatcherThread = new Thread(this::dispatch, "beckon-ffm-dispatch");
         dispatcherThread.setDaemon(true);
@@ -238,6 +243,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
             if (fd < 0) {
                 throw new IllegalStateException("signalfd() failed");
             }
+            int flagsResult = (int) fcntl.invokeExact(fd, F_SETFL, O_NONBLOCK);
+            if (flagsResult < 0) throw new IllegalStateException("fcntl() failed");
             wakeFd = (int) eventfd.invokeExact(0, EFD_CLOEXEC);
             if (wakeFd < 0) throw new IllegalStateException("eventfd() failed");
             debug("initialized fd=" + fd + " wakeFd=" + wakeFd);
