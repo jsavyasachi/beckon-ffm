@@ -57,7 +57,9 @@ public final class FfmSignalfdBackend implements SignalBackend {
     // --- Linux constants (x86_64 / aarch64) ---------------------------------
     private static final int SIG_BLOCK   = 0;
     private static final int SFD_CLOEXEC = 0x80000;
+    private static final int SFD_NONBLOCK = 0x800;
     private static final int EFD_CLOEXEC = 0x80000;
+    private static final int HOTSPOT_SIGNAL = 12; // SIGUSR2 on Linux
     private static final short POLLIN = 0x0001;
     private static final int SIGSET_SIZE = 128;          // glibc sigset_t
     private static final int SIGINFO_SIZE = 128;         // struct signalfd_siginfo
@@ -218,13 +220,18 @@ public final class FfmSignalfdBackend implements SignalBackend {
             // In external mode every JVM thread inherited this mask from the
             // pre-launch shim. Otherwise preserve the historical raise!-only
             // behavior by blocking supported signals in this dispatcher.
-            MemorySegment blockAll = sigset(externalAllowlist.isEmpty()
+            Set<Integer> dispatcherSignals = new HashSet<>(externalAllowlist.isEmpty()
                 ? SIGNOS.values() : externalAllowlist);
+            // HotSpot uses SIGUSR2 for internal thread coordination. Keep it
+            // out of poll(2)'s EINTR path even when external mode has a narrow
+            // application allowlist.
+            dispatcherSignals.add(HOTSPOT_SIGNAL);
+            MemorySegment blockAll = sigset(dispatcherSignals);
             int r = (int) pthreadSigmask.invokeExact(SIG_BLOCK, blockAll, MemorySegment.NULL);
             requireZero("pthread_sigmask", r);
             // Start with an empty signalfd mask; register() adds to it.
             MemorySegment empty = sigset(java.util.Collections.emptyList());
-            fd = (int) signalfd.invokeExact(-1, empty, SFD_CLOEXEC);
+            fd = (int) signalfd.invokeExact(-1, empty, SFD_CLOEXEC | SFD_NONBLOCK);
             if (fd < 0) {
                 throw new IllegalStateException("signalfd() failed");
             }
@@ -238,6 +245,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
         ready.countDown();
 
         MemorySegment buf = arena.allocate(SIGINFO_SIZE);
+        MemorySegment wakeBuf = arena.allocate(JAVA_LONG);
         MemorySegment pollfds = arena.allocate(16);
         while (running) {
             pollfds.set(JAVA_INT, 0, fd);
@@ -253,9 +261,22 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 if (!running) break;
                 continue;
             }
-            if (!running || ready <= 0) continue;
-            if ((pollfds.get(JAVA_SHORT, 12) & POLLIN) != 0) break;
-            if ((pollfds.get(JAVA_SHORT, 6) & POLLIN) == 0) continue;
+            if (!running) break;
+            boolean wakeReady = (pollfds.get(JAVA_SHORT, 14) & POLLIN) != 0;
+            boolean signalReady = (pollfds.get(JAVA_SHORT, 6) & POLLIN) != 0;
+            if (wakeReady) {
+                try {
+                    long n = (long) read.invokeExact(wakeFd, wakeBuf, 8L);
+                    if (n != 8L) continue;
+                } catch (Throwable e) {
+                    if (!running) break;
+                    continue;
+                }
+                // close() uses the same eventfd wakeup. Do not touch the
+                // signalfd or arena after the owner has requested shutdown.
+                if (!running) break;
+            }
+            if (!signalReady) continue;
             long n;
             try {
                 n = (long) read.invokeExact(fd, buf, (long) SIGINFO_SIZE);
@@ -272,6 +293,12 @@ public final class FfmSignalfdBackend implements SignalBackend {
             CountDownLatch done = raiseDone;
             if (done != null) done.countDown();
         }
+    }
+
+    private long writeWakeup(int descriptor) throws Throwable {
+        MemorySegment value = arena.allocate(JAVA_LONG);
+        value.set(JAVA_LONG, 0, 1L);
+        return (long) write.invokeExact(descriptor, value, 8L);
     }
 
     private void closeNativeDescriptor(int descriptor) {
@@ -292,9 +319,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
         int descriptor = wakeFd;
         if (descriptor >= 0) {
             try {
-                MemorySegment value = arena.allocate(JAVA_LONG);
-                value.set(JAVA_LONG, 0, 1L);
-                long ignored = (long) write.invokeExact(descriptor, value, 8L);
+                long ignored = writeWakeup(descriptor);
             } catch (Throwable ignored) {
                 // The dispatcher may already have exited after initialization failed.
             }
@@ -399,15 +424,20 @@ public final class FfmSignalfdBackend implements SignalBackend {
         }
         boolean firstRegistration = !registry.containsKey(signo);
         registry.put(signo, runnables);
-        // SIG_IGN is only safe when every thread has this signal blocked (the
-        // launcher's allowlist), since disposition is process-wide but the mask
-        // is per-thread: an unblocked thread receiving SIG_IGN would silently
-        // swallow the signal instead of terminating. Outside the allowlist,
-        // only the dispatcher thread blocks it, so SIG_DFL preserves the
-        // historical (racy but not silent) termination behavior everywhere else.
-        long previous = setDisposition(signo,
-            externalAllowlist.contains(signo) ? SIG_IGN : SIG_DFL);
-        if (firstRegistration) previousDispositions.put(signo, previous);
+        // HotSpot uses SIGUSR2 internally for suspend/resume. Its disposition
+        // is process-wide, so replacing it with SIG_DFL would let an unrelated
+        // VM operation terminate the JVM. The dispatcher still blocks SIGUSR2
+        // and consumes its own thread-directed raises through signalfd.
+        if (signo != HOTSPOT_SIGNAL) {
+            // SIG_IGN is only safe when every thread has this signal blocked
+            // (the launcher's allowlist), since disposition is process-wide but
+            // the mask is per-thread. Outside the allowlist, only the
+            // dispatcher thread blocks it, so SIG_DFL preserves the historical
+            // (racy but not silent) termination behavior elsewhere.
+            long previous = setDisposition(signo,
+                externalAllowlist.contains(signo) ? SIG_IGN : SIG_DFL);
+            if (firstRegistration) previousDispositions.put(signo, previous);
+        }
         rebuildMask();
     }
 
@@ -416,8 +446,10 @@ public final class FfmSignalfdBackend implements SignalBackend {
         int signo = signo(signame);
         registry.remove(signo);
         rebuildMask();
-        setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
-        previousDispositions.remove(signo);
+        if (signo != HOTSPOT_SIGNAL) {
+            setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
+            previousDispositions.remove(signo);
+        }
     }
 
     @Override
@@ -426,8 +458,10 @@ public final class FfmSignalfdBackend implements SignalBackend {
         registry.clear();
         rebuildMask();
         for (Integer signo : signos) {
-            setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
-            previousDispositions.remove(signo);
+            if (signo != HOTSPOT_SIGNAL) {
+                setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
+                previousDispositions.remove(signo);
+            }
         }
     }
 
@@ -451,6 +485,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 // blocked), so it becomes pending there and is read from the fd.
                 int r = (int) pthreadKill.invokeExact(dispatcherPthread, signo);
                 requireZero("pthread_kill", r);
+                long n = writeWakeup(wakeFd);
+                if (n != 8L) throw new IllegalStateException("write() return=" + n);
             } catch (Throwable e) {
                 raiseDone = null;
                 throw new RuntimeException("pthread_kill failed for " + signame, e);

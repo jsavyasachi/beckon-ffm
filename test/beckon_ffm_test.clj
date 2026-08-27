@@ -119,6 +119,20 @@
       (finally
         (set-native-disposition 15 prior)))))
 
+(deftest registration-preserves-hotspot-usr2-disposition
+  (if (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
+    (let [prior (set-native-disposition 12 1)]
+      (try
+        (reset! (beckon/signal-atom "USR2") [identity])
+        (is (= 1 (set-native-disposition 12 1))
+            "Linux registration must not replace HotSpot's SIGUSR2 disposition")
+        (beckon/reinit! "USR2")
+        (is (= 1 (set-native-disposition 12 1))
+            "Linux reset must not replace HotSpot's SIGUSR2 disposition")
+        (finally
+          (set-native-disposition 12 prior))))
+    (is true "Linux signalfd-only regression test")))
+
 (deftest backend-close-stops-dispatcher-restores-dispositions-and-releases-resources
   (let [signo (if (= "FfmKqueueBackend" (SignalRegistererHelper/backendName)) 30 10)
         prior (set-native-disposition signo 1)
@@ -147,6 +161,22 @@
       (finally
         (beckon-ffm/close! backend)
         (beckon-ffm/close! fresh)))))
+
+(deftest signalfd-dispatcher-survives-repeated-thread-directed-raises
+  (if (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
+    (let [backend (backend-instance)
+          hits (atom 0)]
+      (try
+        (.register backend "USR2" [(fn [] (swap! hits inc))])
+        (dotimes [_ 8]
+          (.raise backend "USR2"))
+        (is (= 8 @hits)
+            "every thread-directed signal must be consumed by signalfd")
+        (is (.isAlive (dispatcher-thread backend))
+            "the poll-based dispatcher must remain alive after a raise")
+        (finally
+          (beckon-ffm/close! backend))))
+    (is true "Linux signalfd-only regression test")))
 
 (defn- linux? [] (= "Linux" (System/getProperty "os.name")))
 

@@ -10,6 +10,18 @@ All notable changes to this project are documented here. Format follows [Keep a 
   dispositions, and release FFM descriptors and shared memory. This supports
   clean REPL reloads, test teardown, and supervised restarts.
 
+### Fixed
+
+- The Linux `signalfd` backend no longer changes `SIGUSR2`'s process-wide
+  disposition. HotSpot uses `SIGUSR2` internally for thread suspend/resume, so
+  installing `SIG_DFL` there could terminate the JVM. The dispatcher still
+  blocks the signal and consumes its own thread-directed raises via `signalfd`.
+- Corrected the second `struct pollfd` entry's `revents` offset in the
+  dispatcher poll loop, which previously read back the `events` field and so
+  never observed the shutdown wakeup.
+- The `signalfd` descriptor is opened with `SFD_NONBLOCK` and `raise!` posts the
+  eventfd wakeup, so a post-`poll` read can never block the dispatcher.
+
 ## [0.2.0] - 2026-08-27
 
 ### Added
