@@ -4,6 +4,7 @@
 
    Usage:
      clojure -T:build compile-java   ; javac src/java -> target/classes (JDK 22+)
+     clojure -T:build compile-native-shim ; cc tools/beckon-signal-launcher.c -> target/beckon-signal-launcher
      clojure -T:build jar
      clojure -T:build deploy"
   (:require [clojure.tools.build.api :as b]
@@ -24,6 +25,11 @@
             :class-dir class-dir
             :basis @basis
             :javac-opts ["-source" "22" "-target" "22"]}))
+
+(defn compile-native-shim [_]
+  (b/process {:command-args ["cc" "-std=c11" "-Wall" "-Wextra" "-O2"
+                             "tools/beckon-signal-launcher.c"
+                             "-o" "target/beckon-signal-launcher"]}))
 
 (defn jar [_]
   (clean nil)

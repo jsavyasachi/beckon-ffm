@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Added the opt-in Linux `beckon-signal-launcher`, which pre-blocks an explicit
+  signal allowlist before starting the JVM so `signalfd` can reliably receive
+  external signals. `USR2` and `CHLD` are rejected by default, and `-Xrs` is
+  required for HotSpot-managed termination signals.
+- Added Linux subprocess integration tests for launcher and no-launcher modes.
+
+### Fixed
+
+- Linux registration now installs `SIG_IGN` instead of transiently replacing a
+  managed signal with `SIG_DFL`, preventing a registration race from bypassing
+  beckon and JVM shutdown handling.
+
 ## [0.1.8] - 2026-08-17
 
 ### Fixed

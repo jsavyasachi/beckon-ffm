@@ -41,4 +41,5 @@ jobs:
           key: m2-${{ hashFiles('deps.edn') }}
           restore-keys: m2-
       - run: clojure -T:build compile-java
+      - run: clojure -T:build compile-native-shim
       - run: clojure -M:${{ matrix.clojure }}:test
