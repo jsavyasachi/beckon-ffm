@@ -221,8 +221,13 @@ public final class FfmSignalfdBackend implements SignalBackend {
             // In external mode every JVM thread inherited this mask from the
             // pre-launch shim. Otherwise preserve the historical raise!-only
             // behavior by blocking supported signals in this dispatcher.
-            MemorySegment blockAll = sigset(externalAllowlist.isEmpty()
+            Set<Integer> dispatcherSignals = new HashSet<>(externalAllowlist.isEmpty()
                 ? SIGNOS.values() : externalAllowlist);
+            // HotSpot uses SIGUSR2 for internal thread coordination. Keep it
+            // out of poll(2)'s EINTR path even when external mode has a narrow
+            // application allowlist.
+            dispatcherSignals.add(HOTSPOT_SIGNAL);
+            MemorySegment blockAll = sigset(dispatcherSignals);
             int r = (int) pthreadSigmask.invokeExact(SIG_BLOCK, blockAll, MemorySegment.NULL);
             requireZero("pthread_sigmask", r);
             // Start with an empty signalfd mask; register() adds to it.
