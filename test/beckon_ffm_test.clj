@@ -115,12 +115,21 @@
    "-cp" (System/getProperty "java.class.path")
    "clojure.main" "-m" "beckon-signal-child" "TERM"])
 
-(defn- wait-for-line [^java.io.BufferedReader reader expected]
-  (loop [line (.readLine reader)]
-    (cond
-      (= line expected) true
-      (nil? line) false
-      :else (recur (.readLine reader)))))
+(defn- wait-for-line
+  "Reads lines from reader until expected is seen, EOF, or timeout-ms elapses.
+  Runs the blocking read on a daemon future so a hung subprocess can never
+  wedge the test suite indefinitely."
+  [^java.io.BufferedReader reader expected timeout-ms]
+  (let [f (future
+            (loop [line (.readLine reader)]
+              (cond
+                (= line expected) true
+                (nil? line) false
+                :else (recur (.readLine reader)))))
+        result (deref f timeout-ms ::timeout)]
+    (if (= result ::timeout)
+      (do (future-cancel f) false)
+      result)))
 
 (deftest external-term-works-through-prelaunch-shim
   (if (linux?)
@@ -132,9 +141,9 @@
                       (.start))
           reader (io/reader (.getInputStream process))]
       (try
-        (is (wait-for-line reader "READY"))
+        (is (wait-for-line reader "READY" 5000))
         (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
-        (is (wait-for-line reader "HANDLED"))
+        (is (wait-for-line reader "HANDLED" 5000))
         (is (.isAlive process))
         (finally
           (.destroyForcibly process))))
@@ -148,9 +157,11 @@
                       (.start))
           reader (io/reader (.getInputStream process))]
       (try
-        (is (wait-for-line reader "READY"))
+        (is (wait-for-line reader "READY" 5000))
         (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
-        (is (not= 0 (.waitFor process)))
+        (let [exited? (.waitFor process 5 java.util.concurrent.TimeUnit/SECONDS)]
+          (is exited? "process should exit under the default (unmasked) disposition")
+          (when exited? (is (not= 0 (.exitValue process)))))
         (finally
           (.destroyForcibly process))))
     (is true "Linux-only subprocess test")))
