@@ -3,7 +3,6 @@
   signalfd on Linux and kqueue on macOS. project.clj sets
   -Dbeckon.signal.backend=ffm and --enable-native-access."
   (:require [clojure.java.io :as io]
-            [clojure.string :as string]
             [clojure.test :refer :all]
             [beckon :as beckon]
             [beckon-ffm :as beckon-ffm])
@@ -186,7 +185,6 @@
 
 (defn- child-command []
   ["java" "-Xrs" "--enable-native-access=ALL-UNNAMED"
-   "-Dbeckon.signal.debug=true"
    "-Dbeckon.signal.backend=ffm"
    "-cp" (System/getProperty "java.class.path")
    "clojure.main" "-m" "beckon-signal-child" "TERM"])
@@ -198,9 +196,6 @@
   [^java.io.BufferedReader reader expected timeout-ms]
   (let [f (future
             (loop [line (.readLine reader)]
-              (when line
-                (println "child:" line)
-                (flush))
               (cond
                 (= line expected) true
                 (nil? line) false
@@ -209,18 +204,6 @@
     (if (= result ::timeout)
       (do (future-cancel f) false)
       result)))
-
-(defn- process-diagnostics [process]
-  (let [root (str "/proc/" (.pid process))]
-    (try
-      (str (->> (string/split-lines (slurp (str root "/status")))
-                (filter #(or (.startsWith % "SigBlk:")
-                             (.startsWith % "SigPnd:")
-                             (.startsWith % "ShdPnd:")))
-                (string/join "|")))
-      (catch Exception e
-        (str "root=" root ", alive=" (.isAlive process)
-             ", unavailable: " (.getMessage e))))))
 
 (deftest external-term-works-through-prelaunch-shim
   (if (linux?)
@@ -234,10 +217,7 @@
       (try
         (is (wait-for-line reader "READY" 5000))
         (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
-        (let [handled? (wait-for-line reader "HANDLED" 5000)]
-          (when-not handled?
-            (println "external TERM diagnostics:" (process-diagnostics process)))
-          (is handled?))
+        (is (wait-for-line reader "HANDLED" 5000))
         (is (.isAlive process))
         (finally
           (.destroyForcibly process))))

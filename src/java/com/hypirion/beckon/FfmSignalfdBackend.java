@@ -54,18 +54,13 @@ import clojure.lang.Seqable;
  */
 public final class FfmSignalfdBackend implements SignalBackend {
 
-    private static final boolean DEBUG = Boolean.getBoolean("beckon.signal.debug");
-
     // --- Linux constants (x86_64 / aarch64) ---------------------------------
     private static final int SIG_BLOCK   = 0;
     private static final int SFD_CLOEXEC = 0x80000;
     private static final int SFD_NONBLOCK = 0x800;
-    private static final int F_SETFL = 4;
-    private static final int O_NONBLOCK = 0x800;
     private static final int EFD_CLOEXEC = 0x80000;
     private static final int HOTSPOT_SIGNAL = 12; // SIGUSR2 on Linux
     private static final short POLLIN = 0x0001;
-    private static final int POLL_TIMEOUT_MS = 100;
     private static final int SIGSET_SIZE = 128;          // glibc sigset_t
     private static final int SIGINFO_SIZE = 128;         // struct signalfd_siginfo
     private static final long SIG_DFL = 0L;
@@ -93,7 +88,6 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private final MethodHandle poll;         // int poll(struct pollfd*, nfds_t, int)
     private final MethodHandle write;        // ssize_t write(int, void*, size_t)
     private final MethodHandle closeFn;      // int close(int)
-    private final MethodHandle fcntl;        // int fcntl(int, int, int)
 
     private final Arena arena = Arena.ofShared();
     private final Map<Integer, Seqable> registry = new ConcurrentHashMap<>();
@@ -148,8 +142,6 @@ public final class FfmSignalfdBackend implements SignalBackend {
             FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
         closeFn = linker.downcallHandle(libc.find("close").orElseThrow(),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT));
-        fcntl = linker.downcallHandle(libc.find("fcntl").orElseThrow(),
-            FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
 
         dispatcherThread = new Thread(this::dispatch, "beckon-ffm-dispatch");
         dispatcherThread.setDaemon(true);
@@ -243,12 +235,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
             if (fd < 0) {
                 throw new IllegalStateException("signalfd() failed");
             }
-            int flagsResult = (int) fcntl.invokeExact(fd, F_SETFL, O_NONBLOCK);
-            if (flagsResult < 0) throw new IllegalStateException("fcntl() failed");
             wakeFd = (int) eventfd.invokeExact(0, EFD_CLOEXEC);
             if (wakeFd < 0) throw new IllegalStateException("eventfd() failed");
-            if (DEBUG) debug("initialized fd=" + fd + " wakeFd=" + wakeFd + " fcntl=" + flagsResult
-                + " fdinfo=" + Files.readString(Path.of("/proc/self/fdinfo/" + fd)));
         } catch (Throwable e) {
             running = false;
             ready.countDown();
@@ -268,17 +256,14 @@ public final class FfmSignalfdBackend implements SignalBackend {
             pollfds.set(JAVA_SHORT, 14, (short) 0);
             int ready;
             try {
-                ready = (int) poll.invokeExact(pollfds, 2L, POLL_TIMEOUT_MS);
+                ready = (int) poll.invokeExact(pollfds, 2L, -1);
             } catch (Throwable e) {
                 if (!running) break;
-                debug("poll threw " + e);
                 continue;
             }
             if (!running) break;
-            debug("poll returned " + ready + " signalfd-revents="
-                + pollfds.get(JAVA_SHORT, 6) + " wake-revents="
-                + pollfds.get(JAVA_SHORT, 14));
-            boolean wakeReady = (pollfds.get(JAVA_SHORT, 12) & POLLIN) != 0;
+            boolean wakeReady = (pollfds.get(JAVA_SHORT, 14) & POLLIN) != 0;
+            boolean signalReady = (pollfds.get(JAVA_SHORT, 6) & POLLIN) != 0;
             if (wakeReady) {
                 try {
                     long n = (long) read.invokeExact(wakeFd, wakeBuf, 8L);
@@ -291,21 +276,14 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 // signalfd or arena after the owner has requested shutdown.
                 if (!running) break;
             }
-            // A process-directed signal should make signalfd readable, but a
-            // nonblocking drain on each poll tick also covers kernels where a
-            // pending signal becomes visible to read() without a new POLLIN
-            // notification. The eventfd still provides immediate wakeups for
-            // close() and thread-directed raise().
+            if (!signalReady) continue;
             long n;
             try {
-                debug("about to read signalfd");
                 n = (long) read.invokeExact(fd, buf, (long) SIGINFO_SIZE);
             } catch (Throwable e) {
                 if (!running) break;
-                debug("signalfd read threw " + e);
                 continue;
             }
-            debug("signalfd read returned " + n);
             if (n < SIGINFO_SIZE) {
                 if (!running) break;
                 continue; // EINTR or short read; retry
@@ -321,10 +299,6 @@ public final class FfmSignalfdBackend implements SignalBackend {
         MemorySegment value = arena.allocate(JAVA_LONG);
         value.set(JAVA_LONG, 0, 1L);
         return (long) write.invokeExact(descriptor, value, 8L);
-    }
-
-    private static void debug(String message) {
-        if (DEBUG) System.err.println("beckon-ffm: " + message);
     }
 
     private void closeNativeDescriptor(int descriptor) {
@@ -450,7 +424,6 @@ public final class FfmSignalfdBackend implements SignalBackend {
         }
         boolean firstRegistration = !registry.containsKey(signo);
         registry.put(signo, runnables);
-        debug("registered " + signame + " (" + signo + ")");
         // HotSpot uses SIGUSR2 internally for suspend/resume. Its disposition
         // is process-wide, so replacing it with SIG_DFL would let an unrelated
         // VM operation terminate the JVM. The dispatcher still blocks SIGUSR2
