@@ -119,6 +119,17 @@
       (finally
         (set-native-disposition 15 prior)))))
 
+(deftest registration-preserves-hotspot-usr2-disposition
+  (if (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
+    (let [prior (set-native-disposition 12 1)]
+      (try
+        (reset! (beckon/signal-atom "USR2") [identity])
+        (is (= 1 (set-native-disposition 12 1))
+            "Linux registration must not replace HotSpot's SIGUSR2 disposition")
+        (finally
+          (set-native-disposition 12 prior))))
+    (is true "Linux signalfd-only regression test")))
+
 (deftest backend-close-stops-dispatcher-restores-dispositions-and-releases-resources
   (let [signo (if (= "FfmKqueueBackend" (SignalRegistererHelper/backendName)) 30 10)
         prior (set-native-disposition signo 1)
