@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-27
+
 ### Fixed
 
 - Isolated Linux and BSD native ABI layouts, validating supported platform sizes
