@@ -126,6 +126,9 @@
         (reset! (beckon/signal-atom "USR2") [identity])
         (is (= 1 (set-native-disposition 12 1))
             "Linux registration must not replace HotSpot's SIGUSR2 disposition")
+        (beckon/reinit! "USR2")
+        (is (= 1 (set-native-disposition 12 1))
+            "Linux reset must not replace HotSpot's SIGUSR2 disposition")
         (finally
           (set-native-disposition 12 prior))))
     (is true "Linux signalfd-only regression test")))

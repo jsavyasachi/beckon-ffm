@@ -56,9 +56,9 @@ public final class FfmSignalfdBackend implements SignalBackend {
 
     // --- Linux constants (x86_64 / aarch64) ---------------------------------
     private static final int SIG_BLOCK   = 0;
-    private static final int SIG_SETMASK = 2;
     private static final int SFD_CLOEXEC = 0x80000;
     private static final int EFD_CLOEXEC = 0x80000;
+    private static final int HOTSPOT_SIGNAL = 12; // SIGUSR2 on Linux
     private static final short POLLIN = 0x0001;
     private static final int SIGSET_SIZE = 128;          // glibc sigset_t
     private static final int SIGINFO_SIZE = 128;         // struct signalfd_siginfo
@@ -142,21 +142,6 @@ public final class FfmSignalfdBackend implements SignalBackend {
         closeFn = linker.downcallHandle(libc.find("close").orElseThrow(),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT));
 
-        // Block the supported signals before creating the dispatcher. A new
-        // native thread inherits its creator's mask, which closes the window
-        // in which HotSpot or a caller could target the dispatcher before its
-        // first pthread_sigmask call. Restore the creator's mask after the
-        // dispatcher has completed native initialization.
-        MemorySegment creatorMask = arena.allocate(SIGSET_SIZE);
-        try {
-            MemorySegment blockAll = sigset(externalAllowlist.isEmpty()
-                ? SIGNOS.values() : externalAllowlist);
-            int r = (int) pthreadSigmask.invokeExact(SIG_BLOCK, blockAll, creatorMask);
-            requireZero("pthread_sigmask", r);
-        } catch (Throwable e) {
-            throw new RuntimeException("FFM signal backend init failed", e);
-        }
-
         dispatcherThread = new Thread(this::dispatch, "beckon-ffm-dispatch");
         dispatcherThread.setDaemon(true);
         dispatcherThread.start();
@@ -164,14 +149,6 @@ public final class FfmSignalfdBackend implements SignalBackend {
             ready.await();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } finally {
-            try {
-                int r = (int) pthreadSigmask.invokeExact(SIG_SETMASK, creatorMask,
-                                                          MemorySegment.NULL);
-                requireZero("pthread_sigmask", r);
-            } catch (Throwable e) {
-                throw new RuntimeException("FFM signal backend init failed", e);
-            }
         }
     }
 
@@ -423,15 +400,20 @@ public final class FfmSignalfdBackend implements SignalBackend {
         }
         boolean firstRegistration = !registry.containsKey(signo);
         registry.put(signo, runnables);
-        // SIG_IGN is only safe when every thread has this signal blocked (the
-        // launcher's allowlist), since disposition is process-wide but the mask
-        // is per-thread: an unblocked thread receiving SIG_IGN would silently
-        // swallow the signal instead of terminating. Outside the allowlist,
-        // only the dispatcher thread blocks it, so SIG_DFL preserves the
-        // historical (racy but not silent) termination behavior everywhere else.
-        long previous = setDisposition(signo,
-            externalAllowlist.contains(signo) ? SIG_IGN : SIG_DFL);
-        if (firstRegistration) previousDispositions.put(signo, previous);
+        // HotSpot uses SIGUSR2 internally for suspend/resume. Its disposition
+        // is process-wide, so replacing it with SIG_DFL would let an unrelated
+        // VM operation terminate the JVM. The dispatcher still blocks SIGUSR2
+        // and consumes its own thread-directed raises through signalfd.
+        if (signo != HOTSPOT_SIGNAL) {
+            // SIG_IGN is only safe when every thread has this signal blocked
+            // (the launcher's allowlist), since disposition is process-wide but
+            // the mask is per-thread. Outside the allowlist, only the
+            // dispatcher thread blocks it, so SIG_DFL preserves the historical
+            // (racy but not silent) termination behavior elsewhere.
+            long previous = setDisposition(signo,
+                externalAllowlist.contains(signo) ? SIG_IGN : SIG_DFL);
+            if (firstRegistration) previousDispositions.put(signo, previous);
+        }
         rebuildMask();
     }
 
@@ -440,8 +422,10 @@ public final class FfmSignalfdBackend implements SignalBackend {
         int signo = signo(signame);
         registry.remove(signo);
         rebuildMask();
-        setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
-        previousDispositions.remove(signo);
+        if (signo != HOTSPOT_SIGNAL) {
+            setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
+            previousDispositions.remove(signo);
+        }
     }
 
     @Override
@@ -450,8 +434,10 @@ public final class FfmSignalfdBackend implements SignalBackend {
         registry.clear();
         rebuildMask();
         for (Integer signo : signos) {
-            setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
-            previousDispositions.remove(signo);
+            if (signo != HOTSPOT_SIGNAL) {
+                setDisposition(signo, previousDispositions.getOrDefault(signo, SIG_DFL));
+                previousDispositions.remove(signo);
+            }
         }
     }
 
