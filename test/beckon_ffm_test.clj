@@ -130,7 +130,7 @@
                                            (child-command))))
                       (.redirectErrorStream true)
                       (.start))
-          reader (.bufferedReader (io/reader (.getInputStream process)))]
+          reader (io/reader (.getInputStream process))]
       (try
         (is (wait-for-line reader "READY"))
         (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
@@ -146,7 +146,7 @@
                        (into-array String (child-command)))
                       (.redirectErrorStream true)
                       (.start))
-          reader (.bufferedReader (io/reader (.getInputStream process)))]
+          reader (io/reader (.getInputStream process))]
       (try
         (is (wait-for-line reader "READY"))
         (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
