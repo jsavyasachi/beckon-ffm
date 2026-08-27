@@ -60,7 +60,7 @@ public final class FfmKqueueBackend implements SignalBackend {
     private static final int NOTE_TRIGGER = 0x01000000;
     private static final long  SIG_DFL = 0L;
     private static final long  SIG_IGN = 1L;
-    private static final int   KEVENT_SIZE = 32; // ident8 filter2 flags2 fflags4 data8 udata8
+    private static final int   KEVENT_SIZE = BsdAbi.KEVENT_SIZE;
 
     private final MethodHandle kqueueFn; // int kqueue(void)
     private final MethodHandle kevent;   // int kevent(int, kevent*, int, kevent*, int, timespec*)
@@ -88,6 +88,7 @@ public final class FfmKqueueBackend implements SignalBackend {
                 "beckon FFM kqueue backend requires macOS/BSD; this is "
                 + System.getProperty("os.name"));
         }
+        BsdAbi.validateCurrentPlatform();
         Linker linker = Linker.nativeLinker();
         SymbolLookup libc = linker.defaultLookup();
         kqueueFn = linker.downcallHandle(libc.find("kqueue").orElseThrow(),
@@ -141,7 +142,9 @@ public final class FfmKqueueBackend implements SignalBackend {
                 continue;
             }
             for (int i = 0; i < n; i++) {
-                long ident = evlist.get(JAVA_LONG, (long) i * KEVENT_SIZE);
+                long ident = !BsdAbi.word64(System.getProperty("os.arch", ""))
+                    ? evlist.get(JAVA_INT, (long) i * KEVENT_SIZE)
+                    : evlist.get(JAVA_LONG, (long) i * KEVENT_SIZE);
                 if (ident == 0) return;
                 fold(registry.get((int) ident));
             }
@@ -158,12 +161,18 @@ public final class FfmKqueueBackend implements SignalBackend {
     private void changeKevent(int ident, short filter, short flags, int fflags) {
         try {
             MemorySegment kev = arena.allocate(KEVENT_SIZE);
-            kev.set(JAVA_LONG, 0, ident);           // ident
+            if (BsdAbi.word64(System.getProperty("os.arch", "")))
+                kev.set(JAVA_LONG, BsdAbi.IDENT_OFFSET, ident);
+            else
+                kev.set(JAVA_INT, BsdAbi.IDENT_OFFSET, (int) ident);
             kev.set(JAVA_SHORT, 8, filter);         // filter
             kev.set(JAVA_SHORT, 10, flags);        // flags
             kev.set(JAVA_INT, 12, fflags);          // fflags
             kev.set(JAVA_LONG, 16, 0L);            // data
-            kev.set(JAVA_LONG, 24, 0L);            // udata
+            if (BsdAbi.word64(System.getProperty("os.arch", "")))
+                kev.set(JAVA_LONG, BsdAbi.UDATA_OFFSET, 0L);
+            else
+                kev.set(JAVA_INT, BsdAbi.UDATA_OFFSET, 0);
             int r = (int) kevent.invokeExact(kq, kev, 1,
                                              MemorySegment.NULL, 0, MemorySegment.NULL);
             requireZero("kevent() change", r);

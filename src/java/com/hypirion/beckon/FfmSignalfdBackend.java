@@ -61,8 +61,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private static final int EFD_CLOEXEC = 0x80000;
     private static final int HOTSPOT_SIGNAL = 12; // SIGUSR2 on Linux
     private static final short POLLIN = 0x0001;
-    private static final int SIGSET_SIZE = 128;          // glibc sigset_t
-    private static final int SIGINFO_SIZE = 128;         // struct signalfd_siginfo
+    private static final int SIGSET_SIZE = LinuxAbi.SIGSET_SIZE;
+    private static final int SIGINFO_SIZE = LinuxAbi.SIGINFO_SIZE;
     private static final long SIG_DFL = 0L;
     private static final long SIG_IGN = 1L;
 
@@ -113,6 +113,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 "beckon FFM signal backend requires Linux (signalfd); this is "
                 + System.getProperty("os.name"));
         }
+        LinuxAbi.validateCurrentPlatform();
         externalAllowlist = externalAllowlist();
         if (!externalAllowlist.isEmpty()) validateExternalStartup();
         Linker linker = Linker.nativeLinker();
@@ -246,14 +247,14 @@ public final class FfmSignalfdBackend implements SignalBackend {
 
         MemorySegment buf = arena.allocate(SIGINFO_SIZE);
         MemorySegment wakeBuf = arena.allocate(JAVA_LONG);
-        MemorySegment pollfds = arena.allocate(16);
+        MemorySegment pollfds = arena.allocate((long) LinuxAbi.POLLFD_SIZE * 2);
         while (running) {
-            pollfds.set(JAVA_INT, 0, fd);
-            pollfds.set(JAVA_SHORT, 4, POLLIN);
-            pollfds.set(JAVA_SHORT, 6, (short) 0);
-            pollfds.set(JAVA_INT, 8, wakeFd);
-            pollfds.set(JAVA_SHORT, 12, POLLIN);
-            pollfds.set(JAVA_SHORT, 14, (short) 0);
+            pollfds.set(JAVA_INT, LinuxAbi.POLLFD_FD_OFFSET, fd);
+            pollfds.set(JAVA_SHORT, LinuxAbi.POLLFD_EVENTS_OFFSET, POLLIN);
+            pollfds.set(JAVA_SHORT, LinuxAbi.POLLFD_FIRST_REVENTS_OFFSET, (short) 0);
+            pollfds.set(JAVA_INT, LinuxAbi.POLLFD_SIZE + LinuxAbi.POLLFD_FD_OFFSET, wakeFd);
+            pollfds.set(JAVA_SHORT, LinuxAbi.POLLFD_SIZE + LinuxAbi.POLLFD_EVENTS_OFFSET, POLLIN);
+            pollfds.set(JAVA_SHORT, LinuxAbi.POLLFD_SECOND_REVENTS_OFFSET, (short) 0);
             int ready;
             try {
                 ready = (int) poll.invokeExact(pollfds, 2L, -1);
@@ -262,8 +263,10 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 continue;
             }
             if (!running) break;
-            boolean wakeReady = (pollfds.get(JAVA_SHORT, 14) & POLLIN) != 0;
-            boolean signalReady = (pollfds.get(JAVA_SHORT, 6) & POLLIN) != 0;
+            boolean wakeReady = (pollfds.get(JAVA_SHORT, LinuxAbi.POLLFD_SECOND_REVENTS_OFFSET)
+                                 & POLLIN) != 0;
+            boolean signalReady = (pollfds.get(JAVA_SHORT, LinuxAbi.POLLFD_FIRST_REVENTS_OFFSET)
+                                   & POLLIN) != 0;
             if (wakeReady) {
                 try {
                     long n = (long) read.invokeExact(wakeFd, wakeBuf, 8L);
