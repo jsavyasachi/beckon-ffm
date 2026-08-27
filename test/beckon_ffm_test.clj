@@ -197,6 +197,9 @@
   [^java.io.BufferedReader reader expected timeout-ms]
   (let [f (future
             (loop [line (.readLine reader)]
+              (when line
+                (println "child:" line)
+                (flush))
               (cond
                 (= line expected) true
                 (nil? line) false
