@@ -213,11 +213,6 @@
                 (filter #(or (.startsWith % "SigBlk:")
                              (.startsWith % "SigPnd:")
                              (.startsWith % "ShdPnd:")))
-                (string/join "|"))
-           " fdinfo="
-           (->> (.listFiles (java.io.File. (str root "/fdinfo")))
-                (map slurp)
-                (filter #(.contains % "sig-mask:"))
                 (string/join "|"))))
     (catch Exception e
       (str "unavailable: " (.getMessage e)))))
