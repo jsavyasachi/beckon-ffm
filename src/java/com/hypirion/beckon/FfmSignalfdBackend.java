@@ -312,8 +312,12 @@ public final class FfmSignalfdBackend implements SignalBackend {
         }
         boolean firstRegistration = !registry.containsKey(signo);
         registry.put(signo, runnables);
-        // SIG_IGN prevents a race during registration from taking the default
-        // action. signalfd still consumes a blocked signal with this disposition.
+        // SIG_IGN is only safe when every thread has this signal blocked (the
+        // launcher's allowlist), since disposition is process-wide but the mask
+        // is per-thread: an unblocked thread receiving SIG_IGN would silently
+        // swallow the signal instead of terminating. Outside the allowlist,
+        // only the dispatcher thread blocks it, so SIG_DFL preserves the
+        // historical (racy but not silent) termination behavior everywhere else.
         long previous = setDisposition(signo,
             externalAllowlist.contains(signo) ? SIG_IGN : SIG_DFL);
         if (firstRegistration) previousDispositions.put(signo, previous);
