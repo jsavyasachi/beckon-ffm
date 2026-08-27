@@ -52,6 +52,22 @@ The platform selects the native mechanism automatically. The beckon API does
 not change. See the
 [beckon README](https://github.com/jsavyasachi/beckon).
 
+### Closing the native backend
+
+The FFM backend owns a dispatcher thread, native descriptor, and shared native
+memory arena. Close it explicitly when the JVM remains running across a REPL
+reload or test suite, or before a supervised in-process restart:
+
+```clojure
+(require '[beckon-ffm :as beckon-ffm])
+(beckon-ffm/close!)
+```
+
+`close!` cooperatively stops the dispatcher, restores all signal dispositions
+that beckon changed, and releases the native resources. It is safe to call
+more than once. A closed backend cannot handle subsequent signals; a fresh JVM
+or freshly constructed backend should be used after shutdown.
+
 ### Reliable Linux external signals (opt-in)
 
 For Linux service-manager or `kill` delivery, launch the JVM through the

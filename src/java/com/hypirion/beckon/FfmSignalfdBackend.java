@@ -4,6 +4,7 @@ import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
+import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -56,6 +57,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
     // --- Linux constants (x86_64 / aarch64) ---------------------------------
     private static final int SIG_BLOCK   = 0;
     private static final int SFD_CLOEXEC = 0x80000;
+    private static final int EFD_CLOEXEC = 0x80000;
+    private static final short POLLIN = 0x0001;
     private static final int SIGSET_SIZE = 128;          // glibc sigset_t
     private static final int SIGINFO_SIZE = 128;         // struct signalfd_siginfo
     private static final long SIG_DFL = 0L;
@@ -79,16 +82,23 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private final MethodHandle pthreadSelf;  // pthread_t pthread_self(void)
     private final MethodHandle pthreadKill;  // int pthread_kill(pthread_t, int)
     private final MethodHandle signalFn;     // sighandler_t signal(int, sighandler_t)
+    private final MethodHandle eventfd;      // int eventfd(unsigned int, int)
+    private final MethodHandle poll;         // int poll(struct pollfd*, nfds_t, int)
+    private final MethodHandle write;        // ssize_t write(int, void*, size_t)
+    private final MethodHandle closeFn;      // int close(int)
 
     private final Arena arena = Arena.ofShared();
     private final Map<Integer, Seqable> registry = new ConcurrentHashMap<>();
     private final Map<Integer, Long> previousDispositions = new ConcurrentHashMap<>();
     private final CountDownLatch ready = new CountDownLatch(1);
     private final Set<Integer> externalAllowlist;
+    private final Thread dispatcherThread;
 
     private volatile int fd = -1;
+    private volatile int wakeFd = -1;
     private volatile long dispatcherPthread = 0;
     private volatile boolean running = true;
+    private boolean closed;
 
     // Serializes raise() and lets it wait for the dispatcher to fold the read it
     // triggered, so signals never bleed from one raise! into a later one.
@@ -122,10 +132,18 @@ public final class FfmSignalfdBackend implements SignalBackend {
         signalFn = linker.downcallHandle(libc.find("signal").orElseThrow(),
             FunctionDescriptor.of(ADDRESS, JAVA_INT, ADDRESS),
             Linker.Option.captureCallState("errno"));
+        eventfd = linker.downcallHandle(libc.find("eventfd").orElseThrow(),
+            FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
+        poll = linker.downcallHandle(libc.find("poll").orElseThrow(),
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT));
+        write = linker.downcallHandle(libc.find("write").orElseThrow(),
+            FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
+        closeFn = linker.downcallHandle(libc.find("close").orElseThrow(),
+            FunctionDescriptor.of(JAVA_INT, JAVA_INT));
 
-        Thread t = new Thread(this::dispatch, "beckon-ffm-dispatch");
-        t.setDaemon(true);
-        t.start();
+        dispatcherThread = new Thread(this::dispatch, "beckon-ffm-dispatch");
+        dispatcherThread.setDaemon(true);
+        dispatcherThread.start();
         try {
             ready.await();
         } catch (InterruptedException e) {
@@ -210,6 +228,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
             if (fd < 0) {
                 throw new IllegalStateException("signalfd() failed");
             }
+            wakeFd = (int) eventfd.invokeExact(0, EFD_CLOEXEC);
+            if (wakeFd < 0) throw new IllegalStateException("eventfd() failed");
         } catch (Throwable e) {
             running = false;
             ready.countDown();
@@ -218,7 +238,24 @@ public final class FfmSignalfdBackend implements SignalBackend {
         ready.countDown();
 
         MemorySegment buf = arena.allocate(SIGINFO_SIZE);
+        MemorySegment pollfds = arena.allocate(16);
         while (running) {
+            pollfds.set(JAVA_INT, 0, fd);
+            pollfds.set(JAVA_SHORT, 4, POLLIN);
+            pollfds.set(JAVA_SHORT, 6, (short) 0);
+            pollfds.set(JAVA_INT, 8, wakeFd);
+            pollfds.set(JAVA_SHORT, 12, POLLIN);
+            pollfds.set(JAVA_SHORT, 14, (short) 0);
+            int ready;
+            try {
+                ready = (int) poll.invokeExact(pollfds, 2L, -1);
+            } catch (Throwable e) {
+                if (!running) break;
+                continue;
+            }
+            if (!running || ready <= 0) continue;
+            if ((pollfds.get(JAVA_SHORT, 12) & POLLIN) != 0) break;
+            if ((pollfds.get(JAVA_SHORT, 6) & POLLIN) == 0) continue;
             long n;
             try {
                 n = (long) read.invokeExact(fd, buf, (long) SIGINFO_SIZE);
@@ -235,6 +272,56 @@ public final class FfmSignalfdBackend implements SignalBackend {
             CountDownLatch done = raiseDone;
             if (done != null) done.countDown();
         }
+    }
+
+    private void closeNativeDescriptor(int descriptor) {
+        if (descriptor < 0) return;
+        try {
+            int result = (int) closeFn.invokeExact(descriptor);
+            if (result != 0) throw new IllegalStateException("return=" + result);
+        } catch (Throwable e) {
+            throw new RuntimeException("close() failed", e);
+        }
+    }
+
+    /** Stop dispatching, restore signal state, and release native resources. */
+    public synchronized void close() {
+        if (closed) return;
+        closed = true;
+        running = false;
+        int descriptor = wakeFd;
+        if (descriptor >= 0) {
+            try {
+                MemorySegment value = arena.allocate(JAVA_LONG);
+                value.set(JAVA_LONG, 0, 1L);
+                long ignored = (long) write.invokeExact(descriptor, value, 8L);
+            } catch (Throwable ignored) {
+                // The dispatcher may already have exited after initialization failed.
+            }
+        }
+        if (Thread.currentThread() != dispatcherThread) {
+            boolean interrupted = false;
+            while (dispatcherThread.isAlive()) {
+                try {
+                    dispatcherThread.join();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
+        }
+        int signalDescriptor = fd;
+        fd = -1;
+        int wakeDescriptor = wakeFd;
+        wakeFd = -1;
+        closeNativeDescriptor(signalDescriptor);
+        closeNativeDescriptor(wakeDescriptor);
+        for (Map.Entry<Integer, Long> entry : previousDispositions.entrySet()) {
+            setDisposition(entry.getKey(), entry.getValue());
+        }
+        registry.clear();
+        previousDispositions.clear();
+        arena.close();
     }
 
     /** Run each Runnable in order, stopping on the first Exception (Errors propagate). */

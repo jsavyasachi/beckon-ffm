@@ -54,8 +54,10 @@ public final class FfmKqueueBackend implements SignalBackend {
 
     // kqueue / struct kevent constants (macOS, 64-bit).
     private static final short EVFILT_SIGNAL = -6;
+    private static final short EVFILT_USER = -10;
     private static final short EV_ADD    = 0x0001;
     private static final short EV_DELETE = 0x0002;
+    private static final int NOTE_TRIGGER = 0x01000000;
     private static final long  SIG_DFL = 0L;
     private static final long  SIG_IGN = 1L;
     private static final int   KEVENT_SIZE = 32; // ident8 filter2 flags2 fflags4 data8 udata8
@@ -65,6 +67,8 @@ public final class FfmKqueueBackend implements SignalBackend {
     private final MethodHandle signalFn; // sig_t signal(int, sig_t)
     private final MethodHandle kill;     // int kill(pid_t, int)
     private final MethodHandle getpid;   // pid_t getpid(void)
+    private final MethodHandle closeFn;  // int close(int)
+    private final Thread dispatcherThread;
 
     private final Arena arena = Arena.ofShared();
     private final Map<Integer, Seqable> registry = new ConcurrentHashMap<>();
@@ -72,6 +76,7 @@ public final class FfmKqueueBackend implements SignalBackend {
     private final CountDownLatch ready = new CountDownLatch(1);
     private volatile int kq = -1;
     private volatile boolean running = true;
+    private boolean closed;
 
     private final Object raiseLock = new Object();
     private volatile CountDownLatch raiseDone;
@@ -96,10 +101,12 @@ public final class FfmKqueueBackend implements SignalBackend {
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
         getpid = linker.downcallHandle(libc.find("getpid").orElseThrow(),
             FunctionDescriptor.of(JAVA_INT));
+        closeFn = linker.downcallHandle(libc.find("close").orElseThrow(),
+            FunctionDescriptor.of(JAVA_INT, JAVA_INT));
 
-        Thread t = new Thread(this::dispatch, "beckon-ffm-kqueue");
-        t.setDaemon(true);
-        t.start();
+        dispatcherThread = new Thread(this::dispatch, "beckon-ffm-kqueue");
+        dispatcherThread.setDaemon(true);
+        dispatcherThread.start();
         try {
             ready.await();
         } catch (InterruptedException e) {
@@ -111,6 +118,7 @@ public final class FfmKqueueBackend implements SignalBackend {
         try {
             kq = (int) kqueueFn.invokeExact();
             if (kq < 0) throw new IllegalStateException("kqueue() failed");
+            changeKevent(0, EVFILT_USER, EV_ADD, 0);
         } catch (Throwable e) {
             running = false;
             ready.countDown();
@@ -134,6 +142,7 @@ public final class FfmKqueueBackend implements SignalBackend {
             }
             for (int i = 0; i < n; i++) {
                 long ident = evlist.get(JAVA_LONG, (long) i * KEVENT_SIZE);
+                if (ident == 0) return;
                 fold(registry.get((int) ident));
             }
             CountDownLatch done = raiseDone;
@@ -143,12 +152,16 @@ public final class FfmKqueueBackend implements SignalBackend {
 
     /** Add or remove an EVFILT_SIGNAL registration for signo. */
     private void changeKevent(int signo, short flags) {
+        changeKevent(signo, EVFILT_SIGNAL, flags, 0);
+    }
+
+    private void changeKevent(int ident, short filter, short flags, int fflags) {
         try {
             MemorySegment kev = arena.allocate(KEVENT_SIZE);
-            kev.set(JAVA_LONG, 0, signo);          // ident
-            kev.set(JAVA_SHORT, 8, EVFILT_SIGNAL); // filter
+            kev.set(JAVA_LONG, 0, ident);           // ident
+            kev.set(JAVA_SHORT, 8, filter);         // filter
             kev.set(JAVA_SHORT, 10, flags);        // flags
-            kev.set(JAVA_INT, 12, 0);              // fflags
+            kev.set(JAVA_INT, 12, fflags);          // fflags
             kev.set(JAVA_LONG, 16, 0L);            // data
             kev.set(JAVA_LONG, 24, 0L);            // udata
             int r = (int) kevent.invokeExact(kq, kev, 1,
@@ -157,6 +170,53 @@ public final class FfmKqueueBackend implements SignalBackend {
         } catch (Throwable e) {
             throw new RuntimeException("kevent() change failed", e);
         }
+    }
+
+    private void wakeDispatcher() {
+        try {
+            changeKevent(0, EVFILT_USER, (short) 0, NOTE_TRIGGER);
+        } catch (RuntimeException ignored) {
+            // The dispatcher can already have exited after a prior close.
+        }
+    }
+
+    private void closeNativeDescriptor() {
+        int descriptor = kq;
+        kq = -1;
+        if (descriptor >= 0) {
+            try {
+                int result = (int) closeFn.invokeExact(descriptor);
+                if (result != 0) throw new IllegalStateException("return=" + result);
+            } catch (Throwable e) {
+                throw new RuntimeException("close() failed", e);
+            }
+        }
+    }
+
+    /** Stop dispatching, restore signal state, and release native resources. */
+    public synchronized void close() {
+        if (closed) return;
+        closed = true;
+        running = false;
+        wakeDispatcher();
+        if (Thread.currentThread() != dispatcherThread) {
+            boolean interrupted = false;
+            while (dispatcherThread.isAlive()) {
+                try {
+                    dispatcherThread.join();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
+        }
+        closeNativeDescriptor();
+        for (Map.Entry<Integer, Long> entry : previousDispositions.entrySet()) {
+            setDisposition(entry.getKey(), entry.getValue());
+        }
+        registry.clear();
+        previousDispositions.clear();
+        arena.close();
     }
 
     /** Set the process-wide disposition of signo and return its previous value. */
