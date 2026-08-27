@@ -54,6 +54,8 @@ import clojure.lang.Seqable;
  */
 public final class FfmSignalfdBackend implements SignalBackend {
 
+    private static final boolean DEBUG = Boolean.getBoolean("beckon.signal.debug");
+
     // --- Linux constants (x86_64 / aarch64) ---------------------------------
     private static final int SIG_BLOCK   = 0;
     private static final int SFD_CLOEXEC = 0x80000;
@@ -238,6 +240,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
             }
             wakeFd = (int) eventfd.invokeExact(0, EFD_CLOEXEC);
             if (wakeFd < 0) throw new IllegalStateException("eventfd() failed");
+            debug("initialized fd=" + fd + " wakeFd=" + wakeFd);
         } catch (Throwable e) {
             running = false;
             ready.countDown();
@@ -260,9 +263,13 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 ready = (int) poll.invokeExact(pollfds, 2L, POLL_TIMEOUT_MS);
             } catch (Throwable e) {
                 if (!running) break;
+                debug("poll threw " + e);
                 continue;
             }
             if (!running) break;
+            debug("poll returned " + ready + " signalfd-revents="
+                + pollfds.get(JAVA_SHORT, 6) + " wake-revents="
+                + pollfds.get(JAVA_SHORT, 14));
             boolean wakeReady = (pollfds.get(JAVA_SHORT, 12) & POLLIN) != 0;
             if (wakeReady) {
                 try {
@@ -286,8 +293,10 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 n = (long) read.invokeExact(fd, buf, (long) SIGINFO_SIZE);
             } catch (Throwable e) {
                 if (!running) break;
+                debug("signalfd read threw " + e);
                 continue;
             }
+            debug("signalfd read returned " + n);
             if (n < SIGINFO_SIZE) {
                 if (!running) break;
                 continue; // EINTR or short read; retry
@@ -303,6 +312,10 @@ public final class FfmSignalfdBackend implements SignalBackend {
         MemorySegment value = arena.allocate(JAVA_LONG);
         value.set(JAVA_LONG, 0, 1L);
         return (long) write.invokeExact(descriptor, value, 8L);
+    }
+
+    private static void debug(String message) {
+        if (DEBUG) System.err.println("beckon-ffm: " + message);
     }
 
     private void closeNativeDescriptor(int descriptor) {
@@ -428,6 +441,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
         }
         boolean firstRegistration = !registry.containsKey(signo);
         registry.put(signo, runnables);
+        debug("registered " + signame + " (" + signo + ")");
         // HotSpot uses SIGUSR2 internally for suspend/resume. Its disposition
         // is process-wide, so replacing it with SIG_DFL would let an unrelated
         // VM operation terminate the JVM. The dispatcher still blocks SIGUSR2
