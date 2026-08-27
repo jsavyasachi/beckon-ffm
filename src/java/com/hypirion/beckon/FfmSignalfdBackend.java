@@ -247,7 +247,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
             if (flagsResult < 0) throw new IllegalStateException("fcntl() failed");
             wakeFd = (int) eventfd.invokeExact(0, EFD_CLOEXEC);
             if (wakeFd < 0) throw new IllegalStateException("eventfd() failed");
-            debug("initialized fd=" + fd + " wakeFd=" + wakeFd);
+            if (DEBUG) debug("initialized fd=" + fd + " wakeFd=" + wakeFd + " fcntl=" + flagsResult
+                + " fdinfo=" + Files.readString(Path.of("/proc/self/fdinfo/" + fd)));
         } catch (Throwable e) {
             running = false;
             ready.countDown();
@@ -297,6 +298,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
             // close() and thread-directed raise().
             long n;
             try {
+                debug("about to read signalfd");
                 n = (long) read.invokeExact(fd, buf, (long) SIGINFO_SIZE);
             } catch (Throwable e) {
                 if (!running) break;
