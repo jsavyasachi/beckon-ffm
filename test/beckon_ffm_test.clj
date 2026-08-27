@@ -207,15 +207,16 @@
       result)))
 
 (defn- process-diagnostics [process]
-  (try
-    (let [root (str "/proc/" (.pid process))]
+  (let [root (str "/proc/" (.pid process))]
+    (try
       (str (->> (string/split-lines (slurp (str root "/status")))
                 (filter #(or (.startsWith % "SigBlk:")
                              (.startsWith % "SigPnd:")
                              (.startsWith % "ShdPnd:")))
-                (string/join "|"))))
-    (catch Exception e
-      (str "unavailable: " (.getMessage e)))))
+                (string/join "|")))
+      (catch Exception e
+        (str "root=" root ", alive=" (.isAlive process)
+             ", unavailable: " (.getMessage e))))))
 
 (deftest external-term-works-through-prelaunch-shim
   (if (linux?)
