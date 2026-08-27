@@ -56,6 +56,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
 
     // --- Linux constants (x86_64 / aarch64) ---------------------------------
     private static final int SIG_BLOCK   = 0;
+    private static final int SIG_SETMASK = 2;
     private static final int SFD_CLOEXEC = 0x80000;
     private static final int EFD_CLOEXEC = 0x80000;
     private static final short POLLIN = 0x0001;
@@ -141,6 +142,21 @@ public final class FfmSignalfdBackend implements SignalBackend {
         closeFn = linker.downcallHandle(libc.find("close").orElseThrow(),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT));
 
+        // Block the supported signals before creating the dispatcher. A new
+        // native thread inherits its creator's mask, which closes the window
+        // in which HotSpot or a caller could target the dispatcher before its
+        // first pthread_sigmask call. Restore the creator's mask after the
+        // dispatcher has completed native initialization.
+        MemorySegment creatorMask = arena.allocate(SIGSET_SIZE);
+        try {
+            MemorySegment blockAll = sigset(externalAllowlist.isEmpty()
+                ? SIGNOS.values() : externalAllowlist);
+            int r = (int) pthreadSigmask.invokeExact(SIG_BLOCK, blockAll, creatorMask);
+            requireZero("pthread_sigmask", r);
+        } catch (Throwable e) {
+            throw new RuntimeException("FFM signal backend init failed", e);
+        }
+
         dispatcherThread = new Thread(this::dispatch, "beckon-ffm-dispatch");
         dispatcherThread.setDaemon(true);
         dispatcherThread.start();
@@ -148,6 +164,14 @@ public final class FfmSignalfdBackend implements SignalBackend {
             ready.await();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } finally {
+            try {
+                int r = (int) pthreadSigmask.invokeExact(SIG_SETMASK, creatorMask,
+                                                          MemorySegment.NULL);
+                requireZero("pthread_sigmask", r);
+            } catch (Throwable e) {
+                throw new RuntimeException("FFM signal backend init failed", e);
+            }
         }
     }
 
