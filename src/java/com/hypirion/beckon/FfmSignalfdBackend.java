@@ -12,10 +12,17 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.lang.management.ManagementFactory;
 
 import clojure.lang.ExceptionInfo;
 import clojure.lang.ISeq;
@@ -52,6 +59,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private static final int SIGSET_SIZE = 128;          // glibc sigset_t
     private static final int SIGINFO_SIZE = 128;         // struct signalfd_siginfo
     private static final long SIG_DFL = 0L;
+    private static final long SIG_IGN = 1L;
 
     /** Catchable signals beckon supports, by POSIX short name. */
     private static final Map<String, Integer> SIGNOS = new LinkedHashMap<>();
@@ -76,6 +84,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private final Map<Integer, Seqable> registry = new ConcurrentHashMap<>();
     private final Map<Integer, Long> previousDispositions = new ConcurrentHashMap<>();
     private final CountDownLatch ready = new CountDownLatch(1);
+    private final Set<Integer> externalAllowlist;
 
     private volatile int fd = -1;
     private volatile long dispatcherPthread = 0;
@@ -92,6 +101,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 "beckon FFM signal backend requires Linux (signalfd); this is "
                 + System.getProperty("os.name"));
         }
+        externalAllowlist = externalAllowlist();
+        if (!externalAllowlist.isEmpty()) validateExternalStartup();
         Linker linker = Linker.nativeLinker();
         SymbolLookup libc = linker.defaultLookup();
         signalfd = linker.downcallHandle(libc.find("signalfd").orElseThrow(),
@@ -122,6 +133,54 @@ public final class FfmSignalfdBackend implements SignalBackend {
         }
     }
 
+    /** Return the launcher's allowlist, or empty when the opt-in mode is off. */
+    private static Set<Integer> externalAllowlist() {
+        String value = System.getenv("BECKON_EXTERNAL_SIGNALS");
+        if (value == null) return Collections.emptySet();
+        boolean unsafe = "1".equals(System.getenv("BECKON_EXTERNAL_ALLOW_UNSAFE"));
+        Set<Integer> result = new HashSet<>();
+        for (String name : value.split(",")) {
+            Integer number = SIGNOS.get(name);
+            if (number == null) throw new IllegalStateException(
+                "invalid BECKON_EXTERNAL_SIGNALS entry: " + name);
+            if ((name.equals("USR2") || name.equals("CHLD")) && !unsafe) {
+                throw new IllegalStateException(
+                    "refusing unsafe external signal " + name
+                    + "; use the launcher's explicit unsafe override only after review");
+            }
+            result.add(number);
+        }
+        return Collections.unmodifiableSet(result);
+    }
+
+    private void validateExternalStartup() {
+        if (!ManagementFactory.getRuntimeMXBean().getInputArguments().contains("-Xrs")) {
+            throw new IllegalStateException(
+                "external signal mode requires the JVM -Xrs flag for TERM/INT/HUP");
+        }
+        try {
+            String status = Files.readString(Path.of("/proc/self/status"));
+            String mask = status.lines().filter(line -> line.startsWith("SigBlk:"))
+                .findFirst().orElseThrow(() -> new IllegalStateException(
+                    "/proc/self/status has no SigBlk field"))
+                .substring("SigBlk:".length()).trim();
+            BigInteger blocked = new BigInteger(mask, 16);
+            for (Integer number : externalAllowlist) {
+                if (!blocked.testBit(number - 1)) throw new IllegalStateException(
+                    "external signal " + signalName(number)
+                    + " is not blocked; launch through beckon-signal-launcher");
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(
+                "external signal mode requires Linux /proc/self/status SigBlk", e);
+        }
+    }
+
+    private static String signalName(int number) {
+        return SIGNOS.entrySet().stream().filter(entry -> entry.getValue() == number)
+            .map(Map.Entry::getKey).findFirst().orElse(String.valueOf(number));
+    }
+
     /** Build a native sigset_t containing the given signal numbers. */
     private MemorySegment sigset(Iterable<Integer> signos) throws Throwable {
         MemorySegment set = arena.allocate(SIGSET_SIZE);
@@ -138,9 +197,11 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private void dispatch() {
         try {
             dispatcherPthread = (long) pthreadSelf.invokeExact();
-            // Block every supported signal in THIS thread, so a pthread_kill
-            // directed here stays pending and is readable via the signalfd.
-            MemorySegment blockAll = sigset(SIGNOS.values());
+            // In external mode every JVM thread inherited this mask from the
+            // pre-launch shim. Otherwise preserve the historical raise!-only
+            // behavior by blocking supported signals in this dispatcher.
+            MemorySegment blockAll = sigset(externalAllowlist.isEmpty()
+                ? SIGNOS.values() : externalAllowlist);
             int r = (int) pthreadSigmask.invokeExact(SIG_BLOCK, blockAll, MemorySegment.NULL);
             requireZero("pthread_sigmask", r);
             // Start with an empty signalfd mask; register() adds to it.
@@ -245,9 +306,15 @@ public final class FfmSignalfdBackend implements SignalBackend {
     @Override
     public synchronized void register(String signame, Seqable runnables) {
         int signo = signo(signame);
+        if (!externalAllowlist.isEmpty() && !externalAllowlist.contains(signo)) {
+            throw new IllegalArgumentException(
+                "signal " + signame + " was not pre-blocked by the launcher's allowlist");
+        }
         boolean firstRegistration = !registry.containsKey(signo);
         registry.put(signo, runnables);
-        long previous = setDisposition(signo, SIG_DFL);
+        // SIG_IGN prevents a race during registration from taking the default
+        // action. signalfd still consumes a blocked signal with this disposition.
+        long previous = setDisposition(signo, SIG_IGN);
         if (firstRegistration) previousDispositions.put(signo, previous);
         rebuildMask();
     }

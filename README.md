@@ -52,6 +52,39 @@ The platform selects the native mechanism automatically. The beckon API does
 not change. See the
 [beckon README](https://github.com/jsavyasachi/beckon).
 
+### Reliable Linux external signals (opt-in)
+
+For Linux service-manager or `kill` delivery, launch the JVM through the
+provided pre-launch shim. It blocks the selected signals before the JVM starts,
+so every JVM thread inherits the mask:
+
+```sh
+clojure -T:build compile-native-shim
+target/beckon-signal-launcher --signals TERM,HUP -- \
+  java -Xrs --enable-native-access=ALL-UNNAMED \
+  -Dbeckon.signal.backend=ffm -jar app.jar
+```
+
+The allowlist is explicit and narrow. Supported names are `HUP`, `INT`,
+`QUIT`, `TERM`, `USR1`, `USR2`, `CHLD`, `CONT`, `TSTP`, and `WINCH` (subject
+to platform availability). `USR2` is reserved by HotSpot and `CHLD` affects
+child-process handling; both are rejected by default. The launcher's
+`--allow-unsafe-signals` override is intentionally explicit and emits a clear
+warning from its failure-policy message; use it only after reviewing the
+impact. The Java backend rejects registrations outside the launcher's
+allowlist and verifies `/proc/self/status` `SigBlk` at startup.
+
+`-Xrs` is required for `TERM`, `INT`, and `HUP`: it tells HotSpot not to install
+its signal handlers for those signals or alter their handling. See HotSpot's
+[`-Xrs` option documentation](https://docs.oracle.com/en/java/javase/22/docs/specs/man/java.html#-xrs)
+and [signal chaining](https://docs.oracle.com/en/java/javase/22/vm/signal-chaining.html).
+
+This mode is opt-in and does not change the default backend. Without the
+shim, Linux `signalfd` remains reliable for beckon's own `raise!`, but external
+process-directed signals are not guaranteed to reach the dispatcher because
+the JVM may have created threads before beckon loads. The default backend and
+existing non-shim behavior are otherwise unchanged.
+
 ## Capabilities and limits
 
 The two implementations differ:
@@ -78,6 +111,7 @@ Use JDK 22. Compile the two Java FFM backends before running the test suite:
 
 ```sh
 clojure -T:build compile-java
+clojure -T:build compile-native-shim
 clojure -M:test
 clojure -T:build jar
 ```
