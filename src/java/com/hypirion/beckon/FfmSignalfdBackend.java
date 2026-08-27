@@ -61,6 +61,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private static final int EFD_CLOEXEC = 0x80000;
     private static final int HOTSPOT_SIGNAL = 12; // SIGUSR2 on Linux
     private static final short POLLIN = 0x0001;
+    private static final int POLL_TIMEOUT_MS = 100;
     private static final int SIGSET_SIZE = 128;          // glibc sigset_t
     private static final int SIGINFO_SIZE = 128;         // struct signalfd_siginfo
     private static final long SIG_DFL = 0L;
@@ -251,7 +252,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
             pollfds.set(JAVA_SHORT, 14, (short) 0);
             int ready;
             try {
-                ready = (int) poll.invokeExact(pollfds, 2L, -1);
+                ready = (int) poll.invokeExact(pollfds, 2L, POLL_TIMEOUT_MS);
             } catch (Throwable e) {
                 if (!running) break;
                 continue;
@@ -270,7 +271,11 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 // signalfd or arena after the owner has requested shutdown.
                 if (!running) break;
             }
-            if (!wakeReady && (pollfds.get(JAVA_SHORT, 6) & POLLIN) == 0) continue;
+            // A process-directed signal should make signalfd readable, but a
+            // nonblocking drain on each poll tick also covers kernels where a
+            // pending signal becomes visible to read() without a new POLLIN
+            // notification. The eventfd still provides immediate wakeups for
+            // close() and thread-directed raise().
             long n;
             try {
                 n = (long) read.invokeExact(fd, buf, (long) SIGINFO_SIZE);
