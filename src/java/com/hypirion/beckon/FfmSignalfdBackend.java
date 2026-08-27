@@ -57,6 +57,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
     // --- Linux constants (x86_64 / aarch64) ---------------------------------
     private static final int SIG_BLOCK   = 0;
     private static final int SFD_CLOEXEC = 0x80000;
+    private static final int SFD_NONBLOCK = 0x800;
     private static final int EFD_CLOEXEC = 0x80000;
     private static final int HOTSPOT_SIGNAL = 12; // SIGUSR2 on Linux
     private static final short POLLIN = 0x0001;
@@ -225,7 +226,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
             requireZero("pthread_sigmask", r);
             // Start with an empty signalfd mask; register() adds to it.
             MemorySegment empty = sigset(java.util.Collections.emptyList());
-            fd = (int) signalfd.invokeExact(-1, empty, SFD_CLOEXEC);
+            fd = (int) signalfd.invokeExact(-1, empty, SFD_CLOEXEC | SFD_NONBLOCK);
             if (fd < 0) {
                 throw new IllegalStateException("signalfd() failed");
             }
@@ -239,6 +240,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
         ready.countDown();
 
         MemorySegment buf = arena.allocate(SIGINFO_SIZE);
+        MemorySegment wakeBuf = arena.allocate(JAVA_LONG);
         MemorySegment pollfds = arena.allocate(16);
         while (running) {
             pollfds.set(JAVA_INT, 0, fd);
@@ -255,8 +257,20 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 continue;
             }
             if (!running || ready <= 0) continue;
-            if ((pollfds.get(JAVA_SHORT, 12) & POLLIN) != 0) break;
-            if ((pollfds.get(JAVA_SHORT, 6) & POLLIN) == 0) continue;
+            boolean wakeReady = (pollfds.get(JAVA_SHORT, 12) & POLLIN) != 0;
+            if (wakeReady) {
+                try {
+                    long n = (long) read.invokeExact(wakeFd, wakeBuf, 8L);
+                    if (n != 8L) continue;
+                } catch (Throwable e) {
+                    if (!running) break;
+                    continue;
+                }
+                // close() uses the same eventfd wakeup. Do not touch the
+                // signalfd or arena after the owner has requested shutdown.
+                if (!running) break;
+            }
+            if (!wakeReady && (pollfds.get(JAVA_SHORT, 6) & POLLIN) == 0) continue;
             long n;
             try {
                 n = (long) read.invokeExact(fd, buf, (long) SIGINFO_SIZE);
@@ -273,6 +287,12 @@ public final class FfmSignalfdBackend implements SignalBackend {
             CountDownLatch done = raiseDone;
             if (done != null) done.countDown();
         }
+    }
+
+    private long writeWakeup(int descriptor) throws Throwable {
+        MemorySegment value = arena.allocate(JAVA_LONG);
+        value.set(JAVA_LONG, 0, 1L);
+        return (long) write.invokeExact(descriptor, value, 8L);
     }
 
     private void closeNativeDescriptor(int descriptor) {
@@ -293,9 +313,7 @@ public final class FfmSignalfdBackend implements SignalBackend {
         int descriptor = wakeFd;
         if (descriptor >= 0) {
             try {
-                MemorySegment value = arena.allocate(JAVA_LONG);
-                value.set(JAVA_LONG, 0, 1L);
-                long ignored = (long) write.invokeExact(descriptor, value, 8L);
+                long ignored = writeWakeup(descriptor);
             } catch (Throwable ignored) {
                 // The dispatcher may already have exited after initialization failed.
             }
@@ -461,6 +479,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
                 // blocked), so it becomes pending there and is read from the fd.
                 int r = (int) pthreadKill.invokeExact(dispatcherPthread, signo);
                 requireZero("pthread_kill", r);
+                long n = writeWakeup(wakeFd);
+                if (n != 8L) throw new IllegalStateException("write() return=" + n);
             } catch (Throwable e) {
                 raiseDone = null;
                 throw new RuntimeException("pthread_kill failed for " + signame, e);
