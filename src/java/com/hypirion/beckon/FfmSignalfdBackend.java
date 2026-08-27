@@ -314,7 +314,8 @@ public final class FfmSignalfdBackend implements SignalBackend {
         registry.put(signo, runnables);
         // SIG_IGN prevents a race during registration from taking the default
         // action. signalfd still consumes a blocked signal with this disposition.
-        long previous = setDisposition(signo, SIG_IGN);
+        long previous = setDisposition(signo,
+            externalAllowlist.contains(signo) ? SIG_IGN : SIG_DFL);
         if (firstRegistration) previousDispositions.put(signo, previous);
         rebuildMask();
     }

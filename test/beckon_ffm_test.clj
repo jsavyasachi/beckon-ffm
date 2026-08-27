@@ -96,11 +96,12 @@
           (set-native-disposition signo prior))))))
 
 (deftest registration-does-not-install-default-disposition
-  (let [prior (set-native-disposition 15 1)]
+  (let [expected (if (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName)) 0 1)
+        prior (set-native-disposition 15 1)]
     (try
       (reset! (beckon/signal-atom "TERM") [identity])
-      (is (= 1 (set-native-disposition 15 1))
-          "managed registration must leave SIG_IGN installed, never SIG_DFL")
+      (is (= expected (set-native-disposition 15 expected))
+          "managed registration must use the backend's safe default disposition")
       (finally
         (set-native-disposition 15 prior)))))
 

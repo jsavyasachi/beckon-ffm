@@ -14,9 +14,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ### Fixed
 
-- Linux registration now installs `SIG_IGN` instead of transiently replacing a
-  managed signal with `SIG_DFL`, preventing a registration race from bypassing
-  beckon and JVM shutdown handling.
+- Linux registration now installs `SIG_IGN` only for signals in the launcher's
+  pre-blocked external allowlist, preserving the registration race protection
+  there while retaining `SIG_DFL` in default mode so externally-delivered
+  signals are not silently swallowed.
 
 ## [0.1.8] - 2026-08-17
 
