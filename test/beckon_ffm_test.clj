@@ -185,6 +185,7 @@
 
 (defn- child-command []
   ["java" "-Xrs" "--enable-native-access=ALL-UNNAMED"
+   "-Dbeckon.signal.debug=true"
    "-Dbeckon.signal.backend=ffm"
    "-cp" (System/getProperty "java.class.path")
    "clojure.main" "-m" "beckon-signal-child" "TERM"])
