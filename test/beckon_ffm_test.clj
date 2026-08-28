@@ -43,6 +43,14 @@
     (.setAccessible field true)
     (.get field backend)))
 
+(defn- backend-signal-names []
+  (let [backend-class (Class/forName
+                       (str "com.hypirion.beckon."
+                            (SignalRegistererHelper/backendName)))
+        field (.getDeclaredField backend-class "SIGNOS")]
+    (.setAccessible field true)
+    (set (keys (.get field nil)))))
+
 (defn- invoke-static [class-name method-name args]
   (let [klass (Class/forName class-name)
         method (.getDeclaredMethod klass method-name
@@ -64,6 +72,18 @@
   (testing "this platform loads an FFM backend"
     (is (contains? #{"FfmSignalfdBackend" "FfmKqueueBackend"}
                    (SignalRegistererHelper/backendName)))))
+
+(deftest backend-signal-map-covers-catchable-platform-signals
+  (let [expected (if (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
+                   #{"HUP" "INT" "QUIT" "USR1" "TERM" "CHLD" "CONT"
+                     "TSTP" "WINCH" "ALRM" "TTIN" "TTOU" "URG" "XCPU"
+                     "VTALRM" "PROF" "IO" "PWR"}
+                   #{"HUP" "INT" "QUIT" "ILL" "TRAP" "ABRT" "EMT"
+                     "FPE" "BUS" "SEGV" "SYS" "PIPE" "ALRM" "TERM"
+                     "URG" "TSTP" "CONT" "CHLD" "TTIN" "TTOU" "IO"
+                     "XCPU" "XFSZ" "VTALRM" "PROF" "WINCH" "INFO" "USR1"})]
+    (is (= expected (backend-signal-names))
+        "the backend map must include every safe, catchable platform signal")))
 
 (deftest linux-abi-validation-reports-the-actual-size
   (testing "a Linux ABI size mismatch names the struct, expected size, actual size, and platform"
@@ -94,15 +114,15 @@
 
 (deftest signal-atom-identity
   (testing "the same signal name gives the same atom"
-    (is (identical? (beckon/signal-atom "USR2") (beckon/signal-atom "USR2"))))
+    (is (identical? (beckon/signal-atom "USR1") (beckon/signal-atom "USR1"))))
   (testing "different signals give different atoms"
-    (is (not (identical? (beckon/signal-atom "USR2") (beckon/signal-atom "WINCH"))))))
+    (is (not (identical? (beckon/signal-atom "USR1") (beckon/signal-atom "WINCH"))))))
 
 (deftest handler-runs-on-raise
   (testing "a handler in the atom runs when the signal is raised"
     (let [ran (promise)]
-      (reset! (beckon/signal-atom "USR2") [(fn [] (deliver ran true))])
-      (beckon/raise! "USR2")
+      (reset! (beckon/signal-atom "USR1") [(fn [] (deliver ran true))])
+      (beckon/raise! "USR1")
       (is (true? (deref ran 2000 :timed-out))))))
 
 (deftest all-handlers-run
@@ -110,15 +130,15 @@
     (let [hits  (atom 0)
           three (java.util.concurrent.CountDownLatch. 3)
           bump  (fn [] (swap! hits inc) (.countDown three))]
-      (reset! (beckon/signal-atom "USR2") [bump bump bump])
-      (beckon/raise! "USR2")
+      (reset! (beckon/signal-atom "USR1") [bump bump bump])
+      (beckon/raise! "USR1")
       (is (.await three 2 java.util.concurrent.TimeUnit/SECONDS))
       (is (= 3 @hits)))))
 
 (deftest empty-handler-collection-is-a-noop
   (testing "a raise with no handlers does not throw"
-    (reset! (beckon/signal-atom "USR2") [])
-    (is (nil? (beckon/raise! "USR2")))))
+    (reset! (beckon/signal-atom "USR1") [])
+    (is (nil? (beckon/raise! "USR1")))))
 
 (deftest reset-restores-prior-native-disposition
   (testing "reset restores the disposition installed before registration"
@@ -141,19 +161,14 @@
       (finally
         (set-native-disposition 15 prior)))))
 
-(deftest registration-preserves-hotspot-usr2-disposition
-  (if (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
-    (let [prior (set-native-disposition 12 1)]
-      (try
-        (reset! (beckon/signal-atom "USR2") [identity])
-        (is (= 1 (set-native-disposition 12 1))
-            "Linux registration must not replace HotSpot's SIGUSR2 disposition")
-        (beckon/reinit! "USR2")
-        (is (= 1 (set-native-disposition 12 1))
-            "Linux reset must not replace HotSpot's SIGUSR2 disposition")
-        (finally
-          (set-native-disposition 12 prior))))
-    (is true "Linux signalfd-only regression test")))
+(deftest jvm-reserved-signal-is-rejected
+  (let [backend (backend-instance)]
+    (try
+      (is (thrown-with-msg? IllegalArgumentException
+                            #"Unsupported signal.*USR2"
+                            (.register backend "USR2" [identity])))
+      (finally
+        (beckon-ffm/close! backend)))))
 
 (deftest backend-close-stops-dispatcher-restores-dispositions-and-releases-resources
   (let [signo (if (= "FfmKqueueBackend" (SignalRegistererHelper/backendName)) 30 10)
@@ -177,8 +192,8 @@
         ran (promise)]
     (try
       (beckon-ffm/close! backend)
-      (.register fresh "USR2" [(fn [] (deliver ran true))])
-      (.raise fresh "USR2")
+      (.register fresh "USR1" [(fn [] (deliver ran true))])
+      (.raise fresh "USR1")
       (is (true? (deref ran 2000 :timed-out)))
       (finally
         (beckon-ffm/close! backend)
@@ -189,9 +204,9 @@
     (let [backend (backend-instance)
           hits (atom 0)]
       (try
-        (.register backend "USR2" [(fn [] (swap! hits inc))])
+        (.register backend "USR1" [(fn [] (swap! hits inc))])
         (dotimes [_ 8]
-          (.raise backend "USR2"))
+          (.raise backend "USR1"))
         (is (= 8 @hits)
             "every thread-directed signal must be consumed by signalfd")
         (is (.isAlive (dispatcher-thread backend))

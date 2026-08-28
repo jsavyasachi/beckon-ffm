@@ -43,13 +43,20 @@ import clojure.lang.Seqable;
  */
 public final class FfmKqueueBackend implements SignalBackend {
 
-    // macOS/BSD signal numbers (these DIFFER from Linux: USR1/USR2 especially).
+    // Catchable, non-JVM-reserved macOS/BSD signals. These numbers differ from
+    // Linux, especially USR1/USR2; SIGKILL and SIGSTOP are not catchable.
     private static final Map<String, Integer> SIGNOS = new LinkedHashMap<>();
     static {
         SIGNOS.put("HUP", 1);   SIGNOS.put("INT", 2);   SIGNOS.put("QUIT", 3);
-        SIGNOS.put("USR1", 30); SIGNOS.put("USR2", 31); SIGNOS.put("TERM", 15);
-        SIGNOS.put("CHLD", 20); SIGNOS.put("CONT", 19); SIGNOS.put("TSTP", 18);
-        SIGNOS.put("WINCH", 28);
+        SIGNOS.put("ILL", 4);   SIGNOS.put("TRAP", 5);  SIGNOS.put("ABRT", 6);
+        SIGNOS.put("EMT", 7);   SIGNOS.put("FPE", 8);   SIGNOS.put("BUS", 10);
+        SIGNOS.put("SEGV", 11); SIGNOS.put("SYS", 12);  SIGNOS.put("PIPE", 13);
+        SIGNOS.put("ALRM", 14); SIGNOS.put("TERM", 15); SIGNOS.put("URG", 16);
+        SIGNOS.put("TSTP", 18); SIGNOS.put("CONT", 19); SIGNOS.put("CHLD", 20);
+        SIGNOS.put("TTIN", 21); SIGNOS.put("TTOU", 22); SIGNOS.put("IO", 23);
+        SIGNOS.put("XCPU", 24); SIGNOS.put("XFSZ", 25); SIGNOS.put("VTALRM", 26);
+        SIGNOS.put("PROF", 27); SIGNOS.put("WINCH", 28); SIGNOS.put("INFO", 29);
+        SIGNOS.put("USR1", 30);
     }
 
     // kqueue / struct kevent constants (macOS, 64-bit).

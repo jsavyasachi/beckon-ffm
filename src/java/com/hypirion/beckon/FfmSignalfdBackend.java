@@ -66,13 +66,20 @@ public final class FfmSignalfdBackend implements SignalBackend {
     private static final long SIG_DFL = 0L;
     private static final long SIG_IGN = 1L;
 
-    /** Catchable signals beckon supports, by POSIX short name. */
+    /**
+     * Catchable, non-JVM-reserved Linux signals, by POSIX short name.
+     * SIGKILL and SIGSTOP cannot be caught; SIGUSR2 and fatal VM signals are
+     * reserved by HotSpot and intentionally stay out of this map.
+     */
     private static final Map<String, Integer> SIGNOS = new LinkedHashMap<>();
     static {
         SIGNOS.put("HUP", 1);   SIGNOS.put("INT", 2);   SIGNOS.put("QUIT", 3);
-        SIGNOS.put("USR1", 10); SIGNOS.put("USR2", 12); SIGNOS.put("TERM", 15);
+        SIGNOS.put("USR1", 10); SIGNOS.put("TERM", 15);
         SIGNOS.put("CHLD", 17); SIGNOS.put("CONT", 18); SIGNOS.put("TSTP", 20);
-        SIGNOS.put("WINCH", 28);
+        SIGNOS.put("WINCH", 28); SIGNOS.put("ALRM", 14); SIGNOS.put("TTIN", 21);
+        SIGNOS.put("TTOU", 22); SIGNOS.put("URG", 23); SIGNOS.put("XCPU", 24);
+        SIGNOS.put("VTALRM", 26); SIGNOS.put("PROF", 27); SIGNOS.put("IO", 29);
+        SIGNOS.put("PWR", 30);
     }
 
     // --- native handles ------------------------------------------------------
