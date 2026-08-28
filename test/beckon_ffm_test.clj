@@ -43,6 +43,14 @@
     (.setAccessible field true)
     (.get field backend)))
 
+(defn- native-descriptor [backend]
+  (let [field-name (if (= "FfmKqueueBackend" (SignalRegistererHelper/backendName))
+                     "kq"
+                     "fd")
+        field (.getDeclaredField (.getClass backend) field-name)]
+    (.setAccessible field true)
+    (.get field backend)))
+
 (defn- backend-signal-names []
   (let [backend-class (Class/forName
                        (str "com.hypirion.beckon."
@@ -193,6 +201,13 @@
       (.join (dispatcher-thread backend) 2000)
       (is (not (.isAlive (dispatcher-thread backend)))
           "close must terminate the dispatcher thread")
+      (is (= -1 (native-descriptor backend))
+          "close must invalidate the native descriptor")
+      (when (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
+        (let [field (.getDeclaredField (.getClass backend) "wakeFd")]
+          (.setAccessible field true)
+          (is (= -1 (.get field backend))
+              "close must invalidate the signalfd wake descriptor")))
       (is (= 1 (set-native-disposition signo 1))
           "close must restore the disposition from before registration")
       (is (nil? (beckon-ffm/close! backend)) "close must be idempotent")
@@ -212,6 +227,35 @@
         (beckon-ffm/close! backend)
         (beckon-ffm/close! fresh)))))
 
+(deftest concurrent-register-and-reset-is-serialized
+  (let [backend (backend-instance)
+        signals ["ALRM" "TTIN" "TTOU" "URG"]]
+    (try
+      (let [jobs (doall (map (fn [signal]
+                              (future
+                                (dotimes [_ 12]
+                                  (.register backend signal [identity])
+                                  (.reset backend signal))))
+                            signals))]
+        (doseq [job jobs]
+          (is (nil? (deref job 5000 ::timeout))
+              "concurrent register/reset must not deadlock")))
+      (doseq [signal signals]
+        (is (empty? (seq (.currentRunnables backend signal)))))
+      (finally
+        (beckon-ffm/close! backend)))))
+
+(deftest repeated-construction-releases-each-dispatcher
+  (dotimes [_ 8]
+    (let [backend (backend-instance)
+          thread (dispatcher-thread backend)]
+      (try
+        (.register backend "USR1" [identity])
+        (finally
+          (beckon-ffm/close! backend)))
+      (is (not (.isAlive thread))
+          "every constructed backend must terminate its dispatcher"))))
+
 (deftest signalfd-dispatcher-survives-repeated-thread-directed-raises
   (if (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
     (let [backend (backend-instance)
@@ -228,7 +272,6 @@
           (beckon-ffm/close! backend))))
     (is true "Linux signalfd-only regression test")))
 
-(defn- linux? [] (= "Linux" (System/getProperty "os.name")))
 (defn- linux? [] (= "Linux" (System/getProperty "os.name")))
 (defn- macos? [] (= "Mac OS X" (System/getProperty "os.name")))
 
