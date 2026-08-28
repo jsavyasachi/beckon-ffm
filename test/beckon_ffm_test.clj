@@ -216,6 +216,8 @@
     (is true "Linux signalfd-only regression test")))
 
 (defn- linux? [] (= "Linux" (System/getProperty "os.name")))
+(defn- linux? [] (= "Linux" (System/getProperty "os.name")))
+(defn- macos? [] (= "Mac OS X" (System/getProperty "os.name")))
 
 (defn- launcher-path []
   (str (System/getProperty "user.dir") "/target/beckon-signal-launcher"))
@@ -259,6 +261,25 @@
         (finally
           (.destroyForcibly process))))
     (is true "Linux-only subprocess test")))
+
+(deftest external-term-works-on-kqueue
+  (if (macos?)
+    (let [process (-> (ProcessBuilder. (into-array String (child-command)))
+                      (.redirectErrorStream true)
+                      (.start))
+          reader (io/reader (.getInputStream process))]
+      (try
+        (is (wait-for-line reader "READY" 5000))
+        (let [killer (-> (ProcessBuilder.
+                          (into-array String ["kill" "-TERM" (str (.pid process))]))
+                         (.start))]
+          (.waitFor killer 5 java.util.concurrent.TimeUnit/SECONDS))
+        (is (wait-for-line reader "HANDLED" 5000))
+        (is (.isAlive process)
+            "kqueue must handle an external TERM without terminating the child")
+        (finally
+          (.destroyForcibly process))))
+    (is true "macOS-only subprocess test")))
 
 (deftest external-term-without-shim-retains-known-limitation
   (if (linux?)
