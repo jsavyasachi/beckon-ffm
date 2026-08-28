@@ -12,8 +12,10 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 
@@ -59,6 +61,17 @@ public final class FfmKqueueBackend implements SignalBackend {
         SIGNOS.put("USR1", 30);
     }
 
+    /** Return the signal names accepted by this platform backend. */
+    public static Set<String> supportedSignals() {
+        return Collections.unmodifiableSet(SIGNOS.keySet());
+    }
+
+    private static MemorySegment symbol(SymbolLookup lookup, String name) {
+        return lookup.find(name).orElseThrow(() -> new IllegalStateException(
+            "missing native symbol '" + name
+            + "' for macOS/BSD kqueue backend; check native access and libc"));
+    }
+
     // kqueue / struct kevent constants (macOS, 64-bit).
     private static final short EVFILT_SIGNAL = -6;
     private static final short EVFILT_USER = -10;
@@ -98,18 +111,18 @@ public final class FfmKqueueBackend implements SignalBackend {
         BsdAbi.validateCurrentPlatform();
         Linker linker = Linker.nativeLinker();
         SymbolLookup libc = linker.defaultLookup();
-        kqueueFn = linker.downcallHandle(libc.find("kqueue").orElseThrow(),
+        kqueueFn = linker.downcallHandle(symbol(libc, "kqueue"),
             FunctionDescriptor.of(JAVA_INT));
-        kevent = linker.downcallHandle(libc.find("kevent").orElseThrow(),
+        kevent = linker.downcallHandle(symbol(libc, "kevent"),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
-        signalFn = linker.downcallHandle(libc.find("signal").orElseThrow(),
+        signalFn = linker.downcallHandle(symbol(libc, "signal"),
             FunctionDescriptor.of(ADDRESS, JAVA_INT, ADDRESS),
             Linker.Option.captureCallState("errno"));
-        kill = linker.downcallHandle(libc.find("kill").orElseThrow(),
+        kill = linker.downcallHandle(symbol(libc, "kill"),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
-        getpid = linker.downcallHandle(libc.find("getpid").orElseThrow(),
+        getpid = linker.downcallHandle(symbol(libc, "getpid"),
             FunctionDescriptor.of(JAVA_INT));
-        closeFn = linker.downcallHandle(libc.find("close").orElseThrow(),
+        closeFn = linker.downcallHandle(symbol(libc, "close"),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT));
 
         dispatcherThread = new Thread(this::dispatch, "beckon-ffm-kqueue");

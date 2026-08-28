@@ -73,6 +73,19 @@
     (is (contains? #{"FfmSignalfdBackend" "FfmKqueueBackend"}
                    (SignalRegistererHelper/backendName)))))
 
+(deftest capabilities-are-side-effect-free-and-actionable
+  (let [capability-fn (ns-resolve 'beckon-ffm 'capabilities)]
+    (is (ifn? capability-fn))
+    (let [capabilities (when capability-fn (capability-fn))]
+    (is (= (System/getProperty "os.name") (:os capabilities)))
+    (is (= (System/getProperty "os.arch") (:architecture capabilities)))
+    (is (= (SignalRegistererHelper/backendName) (:backend capabilities)))
+    (is (seq (:supported-signals capabilities)))
+    (is (seq (:required-symbols capabilities)))
+    (is (integer? (:java-major-version capabilities)))
+    (is (boolean? (:native-access-enabled? capabilities)))
+      (is (map? (:external-signal-prerequisites capabilities))))))
+
 (deftest backend-signal-map-covers-catchable-platform-signals
   (let [expected (if (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
                    #{"HUP" "INT" "QUIT" "USR1" "TERM" "CHLD" "CONT"

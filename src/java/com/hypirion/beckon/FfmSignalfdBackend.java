@@ -82,6 +82,17 @@ public final class FfmSignalfdBackend implements SignalBackend {
         SIGNOS.put("PWR", 30);
     }
 
+    /** Return the signal names accepted by this platform backend. */
+    public static Set<String> supportedSignals() {
+        return Collections.unmodifiableSet(SIGNOS.keySet());
+    }
+
+    private static MemorySegment symbol(SymbolLookup lookup, String name) {
+        return lookup.find(name).orElseThrow(() -> new IllegalStateException(
+            "missing native symbol '" + name
+            + "' for Linux signalfd backend; check native access and libc"));
+    }
+
     // --- native handles ------------------------------------------------------
     private final MethodHandle signalfd;     // int signalfd(int, sigset_t*, int)
     private final MethodHandle read;         // ssize_t read(int, void*, size_t)
@@ -125,30 +136,30 @@ public final class FfmSignalfdBackend implements SignalBackend {
         if (!externalAllowlist.isEmpty()) validateExternalStartup();
         Linker linker = Linker.nativeLinker();
         SymbolLookup libc = linker.defaultLookup();
-        signalfd = linker.downcallHandle(libc.find("signalfd").orElseThrow(),
+        signalfd = linker.downcallHandle(symbol(libc, "signalfd"),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT));
-        read = linker.downcallHandle(libc.find("read").orElseThrow(),
+        read = linker.downcallHandle(symbol(libc, "read"),
             FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
-        sigemptyset = linker.downcallHandle(libc.find("sigemptyset").orElseThrow(),
+        sigemptyset = linker.downcallHandle(symbol(libc, "sigemptyset"),
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
-        sigaddset = linker.downcallHandle(libc.find("sigaddset").orElseThrow(),
+        sigaddset = linker.downcallHandle(symbol(libc, "sigaddset"),
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
-        pthreadSigmask = linker.downcallHandle(libc.find("pthread_sigmask").orElseThrow(),
+        pthreadSigmask = linker.downcallHandle(symbol(libc, "pthread_sigmask"),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, ADDRESS));
-        pthreadSelf = linker.downcallHandle(libc.find("pthread_self").orElseThrow(),
+        pthreadSelf = linker.downcallHandle(symbol(libc, "pthread_self"),
             FunctionDescriptor.of(JAVA_LONG));
-        pthreadKill = linker.downcallHandle(libc.find("pthread_kill").orElseThrow(),
+        pthreadKill = linker.downcallHandle(symbol(libc, "pthread_kill"),
             FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_INT));
-        signalFn = linker.downcallHandle(libc.find("signal").orElseThrow(),
+        signalFn = linker.downcallHandle(symbol(libc, "signal"),
             FunctionDescriptor.of(ADDRESS, JAVA_INT, ADDRESS),
             Linker.Option.captureCallState("errno"));
-        eventfd = linker.downcallHandle(libc.find("eventfd").orElseThrow(),
+        eventfd = linker.downcallHandle(symbol(libc, "eventfd"),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
-        poll = linker.downcallHandle(libc.find("poll").orElseThrow(),
+        poll = linker.downcallHandle(symbol(libc, "poll"),
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT));
-        write = linker.downcallHandle(libc.find("write").orElseThrow(),
+        write = linker.downcallHandle(symbol(libc, "write"),
             FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG));
-        closeFn = linker.downcallHandle(libc.find("close").orElseThrow(),
+        closeFn = linker.downcallHandle(symbol(libc, "close"),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT));
 
         dispatcherThread = new Thread(this::dispatch, "beckon-ffm-dispatch");
