@@ -59,6 +59,21 @@
     (.setAccessible field true)
     (set (keys (.get field nil)))))
 
+(defn- linux? [] (= "Linux" (System/getProperty "os.name")))
+(defn- macos? [] (= "Mac OS X" (System/getProperty "os.name")))
+
+(defn- platform-test [supported? reason f]
+  (if supported?
+    (f)
+    (do
+      (println "SKIPPED:" reason)
+      (is (= :skipped :skipped) reason))))
+
+(defn- native-handle [backend field-name]
+  (let [field (.getDeclaredField (.getClass backend) field-name)]
+    (.setAccessible field true)
+    (.get field backend)))
+
 (defn- invoke-static [class-name method-name args]
   (let [klass (Class/forName class-name)
         method (.getDeclaredMethod klass method-name
@@ -257,23 +272,69 @@
           "every constructed backend must terminate its dispatcher"))))
 
 (deftest signalfd-dispatcher-survives-repeated-thread-directed-raises
-  (if (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
-    (let [backend (backend-instance)
-          hits (atom 0)]
-      (try
-        (.register backend "USR1" [(fn [] (swap! hits inc))])
-        (dotimes [_ 8]
-          (.raise backend "USR1"))
-        (is (= 8 @hits)
-            "every thread-directed signal must be consumed by signalfd")
-        (is (.isAlive (dispatcher-thread backend))
-            "the poll-based dispatcher must remain alive after a raise")
-        (finally
-          (beckon-ffm/close! backend))))
-    (is true "Linux signalfd-only regression test")))
+  (platform-test (= "FfmSignalfdBackend" (SignalRegistererHelper/backendName))
+                 "signalfd-only regression test requires Linux; covered by Linux CI"
+                 (fn []
+                   (let [backend (backend-instance)
+                         hits (atom 0)]
+                     (try
+                       (.register backend "USR1" [(fn [] (swap! hits inc))])
+                       (dotimes [_ 8]
+                         (.raise backend "USR1"))
+                       (is (= 8 @hits)
+                           "every thread-directed signal must be consumed by signalfd")
+                       (is (.isAlive (dispatcher-thread backend))
+                           "the poll-based dispatcher must remain alive after a raise")
+                       (finally
+                         (beckon-ffm/close! backend))))))
 
-(defn- linux? [] (= "Linux" (System/getProperty "os.name")))
-(defn- macos? [] (= "Mac OS X" (System/getProperty "os.name")))
+#_{:clj-kondo/ignore [:inline-def]}
+(deftest unsupported-backend-startup-fails-before-dispatch
+  (let [opposite (if (linux?) "FfmKqueueBackend" "FfmSignalfdBackend")
+        constructor (.getDeclaredConstructor
+                     (Class/forName (str "com.hypirion.beckon." opposite))
+                     (make-array Class 0))]
+    (is (thrown-with-msg? UnsupportedOperationException
+                          #"requires (Linux|macOS/BSD)"
+                          (.newInstance constructor (object-array 0)))
+        "an unsupported backend must fail during startup, not leave a thread behind")))
+
+#_{:clj-kondo/ignore [:inline-def]}
+(deftest selected-backend-native-error-is-immediate
+  (let [backend (backend-instance)]
+    (try
+      (if (= "FfmKqueueBackend" (SignalRegistererHelper/backendName))
+        (let [kevent (native-handle backend "kevent")]
+          (is (= -1 (long (.invokeWithArguments
+                           ^java.lang.invoke.MethodHandle kevent
+                           (object-array [-1 java.lang.foreign.MemorySegment/NULL 0
+                                          java.lang.foreign.MemorySegment/NULL 0
+                                          java.lang.foreign.MemorySegment/NULL]))))
+              "kevent on an invalid descriptor must report its native error"))
+        (let [read (native-handle backend "read")
+              arena (java.lang.foreign.Arena/ofConfined)]
+          (try
+            (is (= -1 (long (.invokeWithArguments
+                             ^java.lang.invoke.MethodHandle read
+                             (object-array [-1 (.allocate arena 128) (long 128)]))))
+                "read on an invalid descriptor must report its native error")
+            (finally (.close arena)))))
+      (finally
+        (beckon-ffm/close! backend))))))
+
+(deftest signalfd-close-releases-both-descriptors
+  (platform-test (linux?)
+                 "FfmSignalfdBackend requires Linux; covered by Linux CI"
+                 (fn []
+                   (let [backend (backend-instance)
+                         thread (dispatcher-thread backend)]
+                     (try
+                       (.register backend "USR1" [identity])
+                       (finally (beckon-ffm/close! backend)))
+                     (.join thread 2000)
+                     (is (not (.isAlive thread)))
+                     (is (= -1 (native-descriptor backend)))
+                     (is (= -1 (native-handle backend "wakeFd")))))))
 
 (defn- launcher-path []
   (str (System/getProperty "user.dir") "/target/beckon-signal-launcher"))
@@ -301,55 +362,58 @@
       result)))
 
 (deftest external-term-works-through-prelaunch-shim
-  (if (linux?)
-    (let [process (-> (ProcessBuilder.
-                       (into-array String
-                                   (concat [(launcher-path) "--signals" "TERM" "--"]
-                                           (child-command))))
-                      (.redirectErrorStream true)
-                      (.start))
-          reader (io/reader (.getInputStream process))]
-      (try
-        (is (wait-for-line reader "READY" 5000))
-        (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
-        (is (wait-for-line reader "HANDLED" 5000))
-        (is (.isAlive process))
-        (finally
-          (.destroyForcibly process))))
-    (is true "Linux-only subprocess test")))
+  (platform-test (linux?)
+                 "Linux launcher subprocess test; covered by Linux CI"
+                 (fn []
+                   (let [process (-> (ProcessBuilder.
+                                      (into-array String
+                                                  (concat [(launcher-path) "--signals" "TERM" "--"]
+                                                          (child-command))))
+                                     (.redirectErrorStream true)
+                                     (.start))
+                         reader (io/reader (.getInputStream process))]
+                     (try
+                       (is (wait-for-line reader "READY" 5000))
+                       (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
+                       (is (wait-for-line reader "HANDLED" 5000))
+                       (is (.isAlive process))
+                       (finally
+                         (.destroyForcibly process)))))))
 
 (deftest external-term-works-on-kqueue
-  (if (macos?)
-    (let [process (-> (ProcessBuilder. (into-array String (child-command)))
-                      (.redirectErrorStream true)
-                      (.start))
-          reader (io/reader (.getInputStream process))]
-      (try
-        (is (wait-for-line reader "READY" 5000))
-        (let [killer (-> (ProcessBuilder.
-                          (into-array String ["kill" "-TERM" (str (.pid process))]))
-                         (.start))]
-          (.waitFor killer 5 java.util.concurrent.TimeUnit/SECONDS))
-        (is (wait-for-line reader "HANDLED" 5000))
-        (is (.isAlive process)
-            "kqueue must handle an external TERM without terminating the child")
-        (finally
-          (.destroyForcibly process))))
-    (is true "macOS-only subprocess test")))
+  (platform-test (macos?)
+                 "macOS kqueue subprocess test; covered by macOS CI"
+                 (fn []
+                   (let [process (-> (ProcessBuilder. (into-array String (child-command)))
+                                     (.redirectErrorStream true)
+                                     (.start))
+                         reader (io/reader (.getInputStream process))]
+                     (try
+                       (is (wait-for-line reader "READY" 5000))
+                       (let [killer (-> (ProcessBuilder.
+                                         (into-array String ["kill" "-TERM" (str (.pid process))]))
+                                        (.start))]
+                         (.waitFor killer 5 java.util.concurrent.TimeUnit/SECONDS))
+                       (is (wait-for-line reader "HANDLED" 5000))
+                       (is (.isAlive process)
+                           "kqueue must handle an external TERM without terminating the child")
+                       (finally
+                         (.destroyForcibly process)))))))
 
 (deftest external-term-without-shim-retains-known-limitation
-  (if (linux?)
-    (let [process (-> (ProcessBuilder.
-                       (into-array String (child-command)))
-                      (.redirectErrorStream true)
-                      (.start))
-          reader (io/reader (.getInputStream process))]
-      (try
-        (is (wait-for-line reader "READY" 5000))
-        (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
-        (let [exited? (.waitFor process 15 java.util.concurrent.TimeUnit/SECONDS)]
-          (is exited? "process should exit under the default (unmasked) disposition")
-          (when exited? (is (not= 0 (.exitValue process)))))
-        (finally
-          (.destroyForcibly process))))
-    (is true "Linux-only subprocess test")))
+  (platform-test (linux?)
+                 "Linux no-shim subprocess test; covered by Linux CI"
+                 (fn []
+                   (let [process (-> (ProcessBuilder.
+                                      (into-array String (child-command)))
+                                     (.redirectErrorStream true)
+                                     (.start))
+                         reader (io/reader (.getInputStream process))]
+                     (try
+                       (is (wait-for-line reader "READY" 5000))
+                       (.destroy (.orElseThrow (java.lang.ProcessHandle/of (.pid process))))
+                       (let [exited? (.waitFor process 15 java.util.concurrent.TimeUnit/SECONDS)]
+                         (is exited? "process should exit under the default (unmasked) disposition")
+                         (when exited? (is (not= 0 (.exitValue process)))))
+                       (finally
+                         (.destroyForcibly process)))))))
