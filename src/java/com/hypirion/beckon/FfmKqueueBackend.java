@@ -37,8 +37,7 @@ import clojure.lang.Seqable;
  * {@code kevent(2)} and runs the handlers when a signal is delivered. Because
  * {@code SIG_IGN} is a process-wide disposition (not a per-thread block), this
  * backend - unlike the Linux signalfd one - also observes signals sent from
- * outside the process (e.g. {@code kill -HUP}). It remains experimental and is
- * not bundled in the released jar.
+ * outside the process (e.g. {@code kill -HUP}). It remains experimental.
  *
  * <p>macOS/BSD only. Constructing it elsewhere throws
  * {@link UnsupportedOperationException}.

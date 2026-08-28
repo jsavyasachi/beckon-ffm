@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Expanded platform-specific signal coverage, added the `beckon-ffm/capabilities`
+  preflight query, and added macOS kqueue CI coverage.
+
 ## [0.4.0] - 2026-08-27
 
 ### Fixed
