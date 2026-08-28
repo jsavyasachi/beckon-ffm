@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Added lifecycle and native error regression coverage, including bounded
+  dispatcher shutdown, repeated construction, concurrent registration/reset,
+  startup guards, and platform-specific external-signal skips.
+
 ## [0.5.0] - 2026-08-27
 
 ### Added
