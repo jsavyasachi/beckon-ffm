@@ -43,3 +43,28 @@ jobs:
       - run: clojure -T:build compile-java
       - run: clojure -T:build compile-native-shim
       - run: clojure -M:${{ matrix.clojure }}:test
+
+  test-macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: ['22']
+        clojure: ['1.12']
+    name: macOS / jdk ${{ matrix.jdk }} / clojure ${{ matrix.clojure }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.jdk }}
+      - uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          cli: latest
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: m2-macos-${{ hashFiles('deps.edn') }}
+          restore-keys: m2-
+      - run: clojure -T:build compile-java
+      - run: clojure -M:${{ matrix.clojure }}:test

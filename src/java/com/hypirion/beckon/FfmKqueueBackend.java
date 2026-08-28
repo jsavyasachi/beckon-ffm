@@ -12,8 +12,10 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 
@@ -35,21 +37,38 @@ import clojure.lang.Seqable;
  * {@code kevent(2)} and runs the handlers when a signal is delivered. Because
  * {@code SIG_IGN} is a process-wide disposition (not a per-thread block), this
  * backend - unlike the Linux signalfd one - also observes signals sent from
- * outside the process (e.g. {@code kill -HUP}). It remains experimental and is
- * not bundled in the released jar.
+ * outside the process (e.g. {@code kill -HUP}). It remains experimental.
  *
  * <p>macOS/BSD only. Constructing it elsewhere throws
  * {@link UnsupportedOperationException}.
  */
 public final class FfmKqueueBackend implements SignalBackend {
 
-    // macOS/BSD signal numbers (these DIFFER from Linux: USR1/USR2 especially).
+    // Catchable, non-JVM-reserved macOS/BSD signals. These numbers differ from
+    // Linux, especially USR1/USR2; SIGKILL and SIGSTOP are not catchable.
     private static final Map<String, Integer> SIGNOS = new LinkedHashMap<>();
     static {
         SIGNOS.put("HUP", 1);   SIGNOS.put("INT", 2);   SIGNOS.put("QUIT", 3);
-        SIGNOS.put("USR1", 30); SIGNOS.put("USR2", 31); SIGNOS.put("TERM", 15);
-        SIGNOS.put("CHLD", 20); SIGNOS.put("CONT", 19); SIGNOS.put("TSTP", 18);
-        SIGNOS.put("WINCH", 28);
+        SIGNOS.put("ILL", 4);   SIGNOS.put("TRAP", 5);  SIGNOS.put("ABRT", 6);
+        SIGNOS.put("EMT", 7);   SIGNOS.put("FPE", 8);   SIGNOS.put("BUS", 10);
+        SIGNOS.put("SEGV", 11); SIGNOS.put("SYS", 12);  SIGNOS.put("PIPE", 13);
+        SIGNOS.put("ALRM", 14); SIGNOS.put("TERM", 15); SIGNOS.put("URG", 16);
+        SIGNOS.put("TSTP", 18); SIGNOS.put("CONT", 19); SIGNOS.put("CHLD", 20);
+        SIGNOS.put("TTIN", 21); SIGNOS.put("TTOU", 22); SIGNOS.put("IO", 23);
+        SIGNOS.put("XCPU", 24); SIGNOS.put("XFSZ", 25); SIGNOS.put("VTALRM", 26);
+        SIGNOS.put("PROF", 27); SIGNOS.put("WINCH", 28); SIGNOS.put("INFO", 29);
+        SIGNOS.put("USR1", 30);
+    }
+
+    /** Return the signal names accepted by this platform backend. */
+    public static Set<String> supportedSignals() {
+        return Collections.unmodifiableSet(SIGNOS.keySet());
+    }
+
+    private static MemorySegment symbol(SymbolLookup lookup, String name) {
+        return lookup.find(name).orElseThrow(() -> new IllegalStateException(
+            "missing native symbol '" + name
+            + "' for macOS/BSD kqueue backend; check native access and libc"));
     }
 
     // kqueue / struct kevent constants (macOS, 64-bit).
@@ -91,18 +110,18 @@ public final class FfmKqueueBackend implements SignalBackend {
         BsdAbi.validateCurrentPlatform();
         Linker linker = Linker.nativeLinker();
         SymbolLookup libc = linker.defaultLookup();
-        kqueueFn = linker.downcallHandle(libc.find("kqueue").orElseThrow(),
+        kqueueFn = linker.downcallHandle(symbol(libc, "kqueue"),
             FunctionDescriptor.of(JAVA_INT));
-        kevent = linker.downcallHandle(libc.find("kevent").orElseThrow(),
+        kevent = linker.downcallHandle(symbol(libc, "kevent"),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
-        signalFn = linker.downcallHandle(libc.find("signal").orElseThrow(),
+        signalFn = linker.downcallHandle(symbol(libc, "signal"),
             FunctionDescriptor.of(ADDRESS, JAVA_INT, ADDRESS),
             Linker.Option.captureCallState("errno"));
-        kill = linker.downcallHandle(libc.find("kill").orElseThrow(),
+        kill = linker.downcallHandle(symbol(libc, "kill"),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
-        getpid = linker.downcallHandle(libc.find("getpid").orElseThrow(),
+        getpid = linker.downcallHandle(symbol(libc, "getpid"),
             FunctionDescriptor.of(JAVA_INT));
-        closeFn = linker.downcallHandle(libc.find("close").orElseThrow(),
+        closeFn = linker.downcallHandle(symbol(libc, "close"),
             FunctionDescriptor.of(JAVA_INT, JAVA_INT));
 
         dispatcherThread = new Thread(this::dispatch, "beckon-ffm-kqueue");

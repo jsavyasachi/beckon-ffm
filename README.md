@@ -81,9 +81,12 @@ target/beckon-signal-launcher --signals TERM,HUP -- \
   -Dbeckon.signal.backend=ffm -jar app.jar
 ```
 
-The allowlist is explicit and narrow. Supported names are `HUP`, `INT`,
-`QUIT`, `TERM`, `USR1`, `USR2`, `CHLD`, `CONT`, `TSTP`, and `WINCH` (subject
-to platform availability). `USR2` is reserved by HotSpot and `CHLD` affects
+The allowlist is explicit and narrow. Supported names are the platform-specific
+catchable signals reported by `(beckon-ffm/capabilities)`, including `HUP`,
+`INT`, `QUIT`, `TERM`, `USR1`, `CHLD`, `CONT`, `TSTP`, `WINCH`, `ALRM`,
+`TTIN`, `TTOU`, `URG`, `XCPU`, `VTALRM`, `PROF`, and `IO` (plus the
+platform-specific names `PWR`, `ILL`, `TRAP`, `ABRT`, `EMT`, `FPE`, `BUS`,
+`SEGV`, `SYS`, `PIPE`, `XFSZ`, and `INFO`). `USR2` is reserved by HotSpot and `CHLD` affects
 child-process handling; both are rejected by default. The launcher's
 `--allow-unsafe-signals` override is intentionally explicit and emits a clear
 warning from its failure-policy message; use it only after reviewing the
@@ -118,8 +121,18 @@ drop-in replacement. `--enable-native-access` is denied by default from JDK 26.
 
 ## Compatibility
 
-Requires JDK 22 or later (Foreign Function & Memory API, JEP 454). Linux and
-macOS/BSD only. CI compiles and tests on JDK 22.
+Requires JDK 22 or later (Foreign Function & Memory API, JEP 454). The released
+jar contains both Java backend classes; the optional Linux launcher is compiled
+locally and is not packaged in that jar.
+
+| Platform | CPU/ABI coverage | Backend and signal-number assumptions |
+| --- | --- | --- |
+| Linux | `x86_64`, `aarch64`, `riscv64`, `ppc64le`, `s390x`, and supported 32-bit Linux JVM architectures | `signalfd`; Linux signal numbering; ABI sizes are validated at startup |
+| macOS/BSD | 32-bit and 64-bit architectures recognized by the kqueue ABI validator, including `x86_64` and `aarch64` | `kqueue`/`EVFILT_SIGNAL`; BSD signal numbering, which differs from Linux (notably `USR1`) |
+
+Other operating systems, CPUs, or libc/kernel combinations fail during startup
+with an actionable platform or ABI diagnostic. CI compiles and tests on Linux
+and macOS with JDK 22.
 
 ## Development
 
