@@ -38,7 +38,7 @@ net.clojars.savya/beckon-ffm {:mvn/version "0.6.0"}
 Leiningen:
 
 ```clojure
-[net.clojars.savya/beckon "0.4.2"]
+[net.clojars.savya/beckon "0.7.0"]
 [net.clojars.savya/beckon-ffm "0.6.0"]
 ```
 
