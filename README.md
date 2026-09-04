@@ -2,9 +2,9 @@
 
 [![Clojars Project](https://img.shields.io/clojars/v/net.clojars.savya/beckon-ffm.svg)](https://clojars.org/net.clojars.savya/beckon-ffm)
 [![cljdoc](https://cljdoc.org/badge/net.clojars.savya/beckon-ffm)](https://cljdoc.org/d/net.clojars.savya/beckon-ffm/CURRENT)
-[![test](https://github.com/jsavyasachi/beckon-ffm/actions/workflows/test.yml/badge.svg)](https://github.com/jsavyasachi/beckon-ffm/actions/workflows/test.yml)
+[![test](https://github.com/savyalabs/beckon-ffm/actions/workflows/test.yml/badge.svg)](https://github.com/savyalabs/beckon-ffm/actions/workflows/test.yml)
 
-Experimental signal backends for [beckon](https://github.com/jsavyasachi/beckon)
+Experimental signal backends for [beckon](https://github.com/savyalabs/beckon)
 use only the Java Foreign Function & Memory API (JDK 22+). Use them as an
 alternative to beckon's default `sun.misc.Signal` backend:
 
@@ -24,7 +24,7 @@ because it requires JDK 22+. The beckon core jar targets JDK 8.
 
 ## Installation
 
-Use [`beckon`](https://github.com/jsavyasachi/beckon) by default. Add
+Use [`beckon`](https://github.com/savyalabs/beckon) by default. Add
 `beckon-ffm` only when you want the experimental Foreign Function & Memory
 backend and can run on JDK 22+.
 
@@ -50,7 +50,7 @@ Run the JVM with:
 
 The platform selects the native mechanism automatically. The beckon API does
 not change. See the
-[beckon README](https://github.com/jsavyasachi/beckon).
+[beckon README](https://github.com/savyalabs/beckon).
 
 ### Closing the native backend
 
@@ -149,5 +149,5 @@ clojure -T:build jar
 
 Copyright © 2026 Savyasachi.
 
-A companion to [beckon](https://github.com/jsavyasachi/beckon) (originally by Jean Niklas L'orange).
+A companion to [beckon](https://github.com/savyalabs/beckon) (originally by Jean Niklas L'orange).
 Distributed under the [Eclipse Public License 1.0](https://www.eclipse.org/legal/epl-v10.html).

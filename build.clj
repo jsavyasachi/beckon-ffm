@@ -39,12 +39,12 @@
                 :version version
                 :basis @basis
                 :src-dirs ["src/java"]
-                :scm {:url "https://github.com/jsavyasachi/beckon-ffm"
-                      :connection "scm:git:https://github.com/jsavyasachi/beckon-ffm.git"
-                      :developerConnection "scm:git:ssh://git@github.com/jsavyasachi/beckon-ffm.git"
+                :scm {:url "https://github.com/savyalabs/beckon-ffm"
+                      :connection "scm:git:https://github.com/savyalabs/beckon-ffm.git"
+                      :developerConnection "scm:git:ssh://git@github.com/savyalabs/beckon-ffm.git"
                       :tag (str "v" version)}
                 :pom-data [[:description "Experimental Foreign Function & Memory signal backends for beckon: Linux signalfd and macOS/BSD kqueue."]
-                           [:url "https://github.com/jsavyasachi/beckon-ffm"]
+                           [:url "https://github.com/savyalabs/beckon-ffm"]
                            [:licenses
                             [:license
                              [:name "Eclipse Public License 1.0"]
